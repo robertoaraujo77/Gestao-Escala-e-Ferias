@@ -429,6 +429,10 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
         cursor.execute("SELECT data_inicio, data_fim, tipo FROM lancamentos WHERE colaborador_id=%s AND tipo!=%s", (colab_id, tipo_bd))
         outros_lancamentos = {}
         for d_ini_str, d_fim_str, t_bd in cursor.fetchall():
+            # A CORREÇÃO: Pula as Férias Oficiais para não bloquear a grade!
+            if t_bd == "Férias (Oficial)":
+                continue
+                
             try:
                 dt_ini = datetime.strptime(d_ini_str, "%d/%m/%Y")
                 dt_fim = datetime.strptime(d_fim_str, "%d/%m/%Y")
@@ -488,7 +492,6 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                         key_checkbox = f"chk_lote_{colab_id}_{dia}_{tipo_bd}_{mes_num}_{ano_sel}"
                         
                         if cols[i].checkbox(label_caixa, value=ja_marcado, disabled=desabilitar, key=key_checkbox):
-                            # Só adicionamos na lista de gravação se não for um conflito
                             if not is_conflito:
                                 dias_marcados.append(data_str_atual)
                             
