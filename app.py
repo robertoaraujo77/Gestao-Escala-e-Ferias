@@ -280,7 +280,7 @@ elif menu == "👥 Gestão de Equipe":
             dados = cursor.fetchone()
             d_atual, b_atual, d_db, b_db, f_efe, f_ofic, f_bh = get_saldos(colab_id)
             
-            # --- HEADER BONITO (Igual ao .exe) ---
+            # --- HEADER BONITO ---
             c_h1, c_h2, c_h3 = st.columns([2, 1, 1])
             c_h1.subheader(dados[0])
             c_h2.markdown(f"<div style='background-color:#fff2e6; color:#cc6600; padding:10px; border-radius:5px; text-align:center; font-weight:bold; border: 1px solid #ffcc99;'>✈ Dias Pendentes: {d_atual}</div>", unsafe_allow_html=True)
@@ -288,7 +288,6 @@ elif menu == "👥 Gestão de Equipe":
             
             st.markdown("<br>", unsafe_allow_html=True)
             
-            # Aviso de Lançamentos Futuros (Se houver)
             if f_efe > 0 or f_ofic > 0 or f_bh > 0:
                 msg_futuro = "📅 **Agendado para meses futuros:**"
                 if f_ofic > 0: msg_futuro += f" &nbsp; `+{f_ofic}d (Assinar)`"
@@ -301,7 +300,6 @@ elif menu == "👥 Gestão de Equipe":
                 funcao = st.text_input("Função", value=dados[1])
                 area = st.text_input("Área", value=dados[2])
                 
-                # Proteção para garantir que a data não quebre na conversão
                 try:
                     data_adm_obj = datetime.strptime(dados[3], "%d/%m/%Y").date()
                 except:
@@ -325,7 +323,6 @@ elif menu == "👥 Gestão de Equipe":
                     btn_status = "Arquivar" if dados[5] == 1 else "Reativar"
                     status_submit = st.form_submit_button(f"📦 {btn_status}", use_container_width=True)
                 with col_btn3:
-                    # Botão de Exclusão Definitiva Retornado!
                     excluir_submit = st.form_submit_button("🗑️ Excluir Definitivo", use_container_width=True)
 
                 if submit:
@@ -343,7 +340,6 @@ elif menu == "👥 Gestão de Equipe":
                     st.rerun()
 
                 if excluir_submit:
-                    # Apaga primeiro os registros da escala para não dar erro de vínculo e depois exclui a pessoa
                     cursor.execute("DELETE FROM lancamentos WHERE colaborador_id=%s", (colab_id,))
                     cursor.execute("DELETE FROM colaboradores WHERE id=%s", (colab_id,))
                     st.rerun()
@@ -371,7 +367,7 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
     tipo_lancamento = st.radio("O que deseja lançar?", ["Férias", "Presencial", "Folga BH"], horizontal=True)
     
     # ----------------------------------------------------
-    # LÓGICA 1: FÉRIAS
+    # LÓGICA 1: FÉRIAS (Com cálculo automático de Fim)
     # ----------------------------------------------------
     if tipo_lancamento == "Férias":
         with st.form("form_ferias"):
@@ -380,29 +376,30 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
             
             col1, col2 = st.columns(2)
             d_inicio = col1.date_input("Data de Início", format="DD/MM/YYYY")
-            d_fim = col2.date_input("Data de Fim", format="DD/MM/YYYY")
+            
+            # Aqui mudamos para pedir a Quantidade de Dias em vez da Data Fim!
+            qtd_dias_input = col2.number_input("Quantidade de Dias", value=20, min_value=1, step=1)
             
             btn_lancar = st.form_submit_button("🚀 Gravar Férias", type="primary", use_container_width=True)
             
             if btn_lancar:
-                if d_fim < d_inicio:
-                    st.error("A data de fim não pode ser antes do início.")
+                # O sistema calcula automaticamente a data final somando os dias
+                d_fim = d_inicio + timedelta(days=qtd_dias_input - 1)
+                qtd_dias = qtd_dias_input
+                
+                if tipo_bd == "Férias (Efetivas)" and (d_db - qtd_dias) < 0:
+                    st.error(f"Saldo final insuficiente! Projetado: {d_db} dias. Tentativa: {qtd_dias} dias.")
                 else:
-                    qtd_dias = (d_fim - d_inicio).days + 1
+                    cursor.execute("INSERT INTO lancamentos (colaborador_id, tipo, data_inicio, data_fim, numero_dias, valor_descontado) VALUES (%s, %s, %s, %s, %s, %s)",
+                                   (colab_id, tipo_bd, d_inicio.strftime("%d/%m/%Y"), d_fim.strftime("%d/%m/%Y"), qtd_dias, 0))
                     
-                    if tipo_bd == "Férias (Efetivas)" and (d_db - qtd_dias) < 0:
-                        st.error(f"Saldo final insuficiente! Projetado: {d_db} dias. Tentativa: {qtd_dias} dias.")
-                    else:
-                        cursor.execute("INSERT INTO lancamentos (colaborador_id, tipo, data_inicio, data_fim, numero_dias, valor_descontado) VALUES (%s, %s, %s, %s, %s, %s)",
-                                       (colab_id, tipo_bd, d_inicio.strftime("%d/%m/%Y"), d_fim.strftime("%d/%m/%Y"), qtd_dias, 0))
-                        
-                        if tipo_bd == "Férias (Oficial)":
-                            cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes + %s WHERE id = %s", (qtd_dias, colab_id))
-                        elif tipo_bd == "Férias (Efetivas)":
-                            cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes - %s WHERE id = %s", (qtd_dias, colab_id))
-                        
-                        st.success("Férias lançadas com sucesso!")
-                        st.rerun()
+                    if tipo_bd == "Férias (Oficial)":
+                        cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes + %s WHERE id = %s", (qtd_dias, colab_id))
+                    elif tipo_bd == "Férias (Efetivas)":
+                        cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes - %s WHERE id = %s", (qtd_dias, colab_id))
+                    
+                    st.success(f"Férias lançadas com sucesso! Fim calculado para: {d_fim.strftime('%d/%m/%Y')}")
+                    st.rerun()
 
     # ----------------------------------------------------
     # LÓGICA 2: PRESENCIAL E FOLGA (Dias Picados via Lote)
@@ -460,7 +457,6 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                         else:
                             ja_marcado = data_str_atual in mapa_existentes
                             
-                            # A SOLUÇÃO: Adicionado o colab_id na chave do checkbox para evitar mistura de memórias!
                             key_checkbox = f"chk_lote_{colab_id}_{dia}_{tipo_bd}_{mes_num}_{ano_sel}"
                             
                             if cols[i].checkbox(str(dia), value=ja_marcado, key=key_checkbox):
@@ -529,7 +525,6 @@ elif menu == "🌴 Gerir Feriados":
         col_ano, col_btn = st.columns([1, 3])
         ano_api = col_ano.number_input("Ano", value=datetime.now().year, step=1)
         
-        # A SOLUÇÃO: Espaçamento de alinhamento perfeito para botões ao lado de inputs
         col_btn.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
         
         submit_api = col_btn.form_submit_button("📥 Buscar da BrasilAPI", use_container_width=True)
