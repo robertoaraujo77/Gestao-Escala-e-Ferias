@@ -296,49 +296,106 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
     
     st.markdown(f"**Saldo Atual:** `{d_atual} dias` | Banco de Horas: `{b_atual}h`")
     
-    tipo_lancamento = st.radio("O que deseja lançar?", ["Férias", "Folga BH", "Presencial"])
+    # Botões na horizontal para melhor visualização
+    tipo_lancamento = st.radio("O que deseja lançar?", ["Férias", "Presencial", "Folga BH"], horizontal=True)
     
-    with st.form("form_lancamento"):
-        if tipo_lancamento == "Férias":
+    # ----------------------------------------------------
+    # LÓGICA 1: FÉRIAS (Contínuas por Data Inicial/Final)
+    # ----------------------------------------------------
+    if tipo_lancamento == "Férias":
+        with st.form("form_ferias"):
             acao_ferias = st.selectbox("Ação de Férias:", ["✍️ Assinar (Férias Oficial) -> ADICIONA Saldo", "🏖️ Efetivar (Férias Efetivas) -> DESCONTA Saldo"])
             tipo_bd = "Férias (Oficial)" if "Oficial" in acao_ferias else "Férias (Efetivas)"
-        elif tipo_lancamento == "Folga BH":
+            
+            col1, col2 = st.columns(2)
+            d_inicio = col1.date_input("Data de Início", format="DD/MM/YYYY")
+            d_fim = col2.date_input("Data de Fim", format="DD/MM/YYYY")
+            
+            btn_lancar = st.form_submit_button("🚀 Gravar Férias", type="primary", use_container_width=True)
+            
+            if btn_lancar:
+                if d_fim < d_inicio:
+                    st.error("A data de fim não pode ser antes do início.")
+                else:
+                    qtd_dias = (d_fim - d_inicio).days + 1
+                    
+                    if tipo_bd == "Férias (Efetivas)" and (d_db - qtd_dias) < 0:
+                        st.error(f"Saldo final insuficiente! Projetado: {d_db} dias. Tentativa: {qtd_dias} dias.")
+                    else:
+                        cursor.execute("INSERT INTO lancamentos (colaborador_id, tipo, data_inicio, data_fim, numero_dias, valor_descontado) VALUES (%s, %s, %s, %s, %s, %s)",
+                                       (colab_id, tipo_bd, d_inicio.strftime("%d/%m/%Y"), d_fim.strftime("%d/%m/%Y"), qtd_dias, 0))
+                        
+                        if tipo_bd == "Férias (Oficial)":
+                            cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes + %s WHERE id = %s", (qtd_dias, colab_id))
+                        elif tipo_bd == "Férias (Efetivas)":
+                            cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes - %s WHERE id = %s", (qtd_dias, colab_id))
+                        
+                        st.success("Férias lançadas com sucesso!")
+                        st.rerun()
+
+    # ----------------------------------------------------
+    # LÓGICA 2: PRESENCIAL E FOLGA (Dias Picados via Calendário Lote)
+    # ----------------------------------------------------
+    else:
+        st.markdown("---")
+        st.markdown(f"### 📅 Selecionar Dias - {tipo_lancamento}")
+        
+        if tipo_lancamento == "Folga BH":
             horas_abater = st.number_input("Horas a abater por dia:", value=8.0, step=0.5)
             tipo_bd = "Folga BH"
         else:
+            horas_abater = 0
             tipo_bd = "Presencial"
             
-        d_inicio = st.date_input("Data de Início", format="DD/MM/YYYY")
-        d_fim = st.date_input("Data de Fim", format="DD/MM/YYYY")
-        
-        btn_lancar = st.form_submit_button("🚀 Gravar Lançamento", type="primary", use_container_width=True)
-        
-        if btn_lancar:
-            if d_fim < d_inicio:
-                st.error("A data de fim não pode ser antes do início.")
-            else:
-                qtd_dias = (d_fim - d_inicio).days + 1
+        with st.form("form_dias_lote"):
+            col_m, col_a = st.columns(2)
+            meses_lista = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+            mes_sel = col_m.selectbox("Mês Alvo", meses_lista, index=datetime.now().month - 1)
+            ano_sel = col_a.number_input("Ano Alvo", value=datetime.now().year, step=1)
+            
+            st.write("Marque as caixinhas dos dias que deseja lançar abaixo:")
+            mes_num = meses_lista.index(mes_sel) + 1
+            cal_matriz = calendar.monthcalendar(ano_sel, mes_num)
+            
+            # Cabeçalho da grade visual
+            dias_semana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
+            cols_header = st.columns(7)
+            for i, d in enumerate(dias_semana):
+                cols_header[i].markdown(f"**{d}**")
                 
-                # Validação de Saldo para Férias Efetivas
-                if tipo_bd == "Férias (Efetivas)" and (d_db - qtd_dias) < 0:
-                    st.error(f"Saldo final insuficiente! Projetado: {d_db} dias. Tentativa: {qtd_dias} dias.")
+            # Linhas da grade visual (O Calendário)
+            dias_marcados = []
+            for semana in cal_matriz:
+                cols = st.columns(7)
+                for i, dia in enumerate(semana):
+                    if dia == 0:
+                        cols[i].write("") # Espaço vazio no calendário
+                    else:
+                        # Cria uma caixinha para o dia. Se marcada, adiciona na lista de gravação.
+                        if cols[i].checkbox(str(dia), key=f"chk_lote_{dia}"):
+                            dias_marcados.append(f"{dia:02d}/{mes_num:02d}/{ano_sel}")
+                            
+            st.markdown("<br>", unsafe_allow_html=True)
+            btn_lancar_lote = st.form_submit_button(f"🚀 Gravar Lançamentos Selecionados", type="primary", use_container_width=True)
+            
+            if btn_lancar_lote:
+                if not dias_marcados:
+                    st.warning("Selecione pelo menos um dia no calendário acima.")
                 else:
-                    # Inserir no Banco
-                    cursor.execute("INSERT INTO lancamentos (colaborador_id, tipo, data_inicio, data_fim, numero_dias, valor_descontado) VALUES (%s, %s, %s, %s, %s, %s)",
-                                   (colab_id, tipo_bd, d_inicio.strftime("%d/%m/%Y"), d_fim.strftime("%d/%m/%Y"), qtd_dias, horas_abater if tipo_bd == "Folga BH" else 0))
-                    
-                    # Atualizar Saldos no Cadastro
-                    if tipo_bd == "Férias (Oficial)":
-                        cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes + %s WHERE id = %s", (qtd_dias, colab_id))
-                    elif tipo_bd == "Férias (Efetivas)":
-                        cursor.execute("UPDATE colaboradores SET dias_pendentes = dias_pendentes - %s WHERE id = %s", (qtd_dias, colab_id))
-                    elif tipo_bd == "Folga BH":
-                        cursor.execute("UPDATE colaboradores SET saldo_bh = saldo_bh - %s WHERE id = %s", (horas_abater * qtd_dias, colab_id))
-                    
-                    st.success("Lançamento efetuado com sucesso!")
+                    for d_str in dias_marcados:
+                        # Grava 1 dia isolado para cada caixinha marcada
+                        cursor.execute("INSERT INTO lancamentos (colaborador_id, tipo, data_inicio, data_fim, numero_dias, valor_descontado) VALUES (%s, %s, %s, %s, %s, %s)",
+                                       (colab_id, tipo_bd, d_str, d_str, 1, horas_abater))
+                        if tipo_bd == "Folga BH":
+                            cursor.execute("UPDATE colaboradores SET saldo_bh = saldo_bh - %s WHERE id = %s", (horas_abater, colab_id))
+                            
+                    st.success(f"{len(dias_marcados)} dia(s) de {tipo_bd} gravado(s) com sucesso!")
                     st.rerun()
                     
-    # Histórico do Colaborador
+    # ----------------------------------------------------
+    # HISTÓRICO DO COLABORADOR (Sempre visível)
+    # ----------------------------------------------------
+    st.markdown("---")
     st.subheader("Histórico de Lançamentos")
     cursor.execute("SELECT id, tipo, data_inicio, data_fim FROM lancamentos WHERE colaborador_id=%s ORDER BY id DESC", (colab_id,))
     historico = cursor.fetchall()
@@ -347,7 +404,6 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
         c1, c2 = st.columns([4, 1])
         c1.write(f"**{t}**: {di} até {df}")
         if c2.button("🗑️ Excluir", key=f"del_{h_id}"):
-            # Regras de devolução de saldo ao excluir
             cursor.execute("SELECT numero_dias, tipo, valor_descontado FROM lancamentos WHERE id=%s", (h_id,))
             res = cursor.fetchone()
             if res:
