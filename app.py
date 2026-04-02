@@ -48,7 +48,7 @@ if not st.session_state.logged_in:
     st.write("Por favor, insira a senha corporativa para gerenciar as escalas.")
     senha = st.text_input("Senha de Acesso", type="password")
     if st.button("Entrar"):
-        if senha == "camarotti2026": # <-- ALTERE A SENHA AQUI SE DESEJAR
+        if senha == st.secrets["senha_acesso"]:
             st.session_state.logged_in = True
             st.rerun()
         else:
