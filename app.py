@@ -128,7 +128,7 @@ st.sidebar.markdown("---")
 menu = st.sidebar.radio("Selecione o Módulo:", [
     "📊 Dashboard Interativo", 
     "👥 Gestão de Equipe", 
-    "✈️ Lançamentos (Férias e Folgas)",
+    "✈️ Lançamentos",
     "🌴 Gerir Feriados"
 ])
 
