@@ -367,7 +367,7 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
     tipo_lancamento = st.radio("O que deseja lançar?", ["Férias", "Presencial", "Folga BH"], horizontal=True)
     
     # ----------------------------------------------------
-    # LÓGICA 1: FÉRIAS (Com cálculo automático de Fim)
+    # LÓGICA 1: FÉRIAS
     # ----------------------------------------------------
     if tipo_lancamento == "Férias":
         with st.form("form_ferias"):
@@ -412,32 +412,32 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
             horas_abater = 0
             tipo_bd = "Presencial"
             
+        # Retirado de dentro do form para recarregar o grid instantaneamente
+        col_m, col_a = st.columns(2)
+        meses_lista = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        mes_sel = col_m.selectbox("Mês Alvo", meses_lista, index=datetime.now().month - 1)
+        ano_sel = col_a.number_input("Ano Alvo", value=datetime.now().year, step=1)
+        
+        mes_num = meses_lista.index(mes_sel) + 1
+        cal_matriz = calendar.monthcalendar(ano_sel, mes_num)
+        
+        cursor.execute("SELECT id, data_inicio, valor_descontado FROM lancamentos WHERE colaborador_id=%s AND tipo=%s", (colab_id, tipo_bd))
+        mapa_existentes = {}
+        for l_id, d_ini_str, v_desc in cursor.fetchall():
+            if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
+                mapa_existentes[d_ini_str] = (l_id, v_desc)
+        
+        cursor.execute("SELECT data_inicio, tipo FROM lancamentos WHERE colaborador_id=%s AND tipo!=%s", (colab_id, tipo_bd))
+        outros_lancamentos = {}
+        for d_ini_str, t_bd in cursor.fetchall():
+            if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
+                outros_lancamentos[d_ini_str] = t_bd
+
+        cursor.execute("SELECT data_feriado, descricao FROM feriados")
+        feriados_lote = {linha[0]: linha[1] for linha in cursor.fetchall()}
+
         with st.form("form_dias_lote"):
-            col_m, col_a = st.columns(2)
-            meses_lista = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
-            mes_sel = col_m.selectbox("Mês Alvo", meses_lista, index=datetime.now().month - 1)
-            ano_sel = col_a.number_input("Ano Alvo", value=datetime.now().year, step=1)
-            
             st.write("Marque as caixinhas dos dias que deseja lançar abaixo:")
-            mes_num = meses_lista.index(mes_sel) + 1
-            cal_matriz = calendar.monthcalendar(ano_sel, mes_num)
-            
-            cursor.execute("SELECT id, data_inicio, valor_descontado FROM lancamentos WHERE colaborador_id=%s AND tipo=%s", (colab_id, tipo_bd))
-            mapa_existentes = {}
-            for l_id, d_ini_str, v_desc in cursor.fetchall():
-                if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
-                    mapa_existentes[d_ini_str] = (l_id, v_desc)
-            
-            cursor.execute("SELECT data_inicio, tipo FROM lancamentos WHERE colaborador_id=%s AND tipo!=%s", (colab_id, tipo_bd))
-            outros_lancamentos = {}
-            for d_ini_str, t_bd in cursor.fetchall():
-                if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
-                    outros_lancamentos[d_ini_str] = t_bd
-
-            # Buscando feriados para travar a grade
-            cursor.execute("SELECT data_feriado, descricao FROM feriados")
-            feriados_lote = {linha[0]: linha[1] for linha in cursor.fetchall()}
-
             dias_semana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
             cols_header = st.columns(7)
             for i, d in enumerate(dias_semana):
@@ -458,14 +458,13 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                         else:
                             ja_marcado = data_str_atual in mapa_existentes
                             
-                            is_weekend = (i == 0 or i == 6) # Coluna 0 é Domingo, 6 é Sábado
+                            is_weekend = (i == 0 or i == 6)
                             is_feriado = data_str_atual in feriados_lote
                             
                             label_caixa = str(dia)
                             if is_feriado:
                                 label_caixa = f"{dia} (Feriado)"
                                 
-                            # Trava a caixinha se for Fim de Semana ou Feriado
                             desabilitar = is_weekend or is_feriado
                             
                             key_checkbox = f"chk_lote_{colab_id}_{dia}_{tipo_bd}_{mes_num}_{ano_sel}"
