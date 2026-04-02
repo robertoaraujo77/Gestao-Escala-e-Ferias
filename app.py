@@ -2,6 +2,7 @@ import streamlit as st
 import psycopg2
 import pandas as pd
 import calendar
+import requests
 from datetime import datetime, date, timedelta
 from calendar import monthrange
 
@@ -11,8 +12,15 @@ from calendar import monthrange
 st.set_page_config(page_title="Gestão de Escala e Férias", page_icon="📅", layout="wide")
 calendar.setfirstweekday(calendar.SUNDAY)
 
-# ⚠️ COLE AQUI A SUA CONNECTION STRING DO SUPABASE ⚠️
-DB_URI = "postgresql://postgres.onrosedryqrtsvswydxv:Q2n&wripu7nW-Nk@aws-1-sa-east-1.pooler.supabase.com:5432/postgres"
+# ==========================================
+# SEGURANÇA: PUXANDO CREDENCIAIS DO SECRETS
+# ==========================================
+try:
+    db = st.secrets["connections"]["postgresql"]
+    DB_URI = f"postgresql://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['database']}"
+except KeyError:
+    st.error("🚨 As credenciais do banco de dados não foram encontradas no st.secrets.")
+    st.stop()
 
 # ==========================================
 # CONEXÃO COM O BANCO DE DADOS (PostgreSQL)
@@ -26,7 +34,7 @@ try:
     conn.autocommit = True
     cursor = conn.cursor()
 except Exception as e:
-    st.error(f"🚨 Erro de Conexão com o Supabase. Verifique a sua DB_URI. Detalhe: {e}")
+    st.error(f"🚨 Erro de Conexão com o Supabase. Detalhe: {e}")
     st.stop()
 
 # ==========================================
@@ -40,7 +48,7 @@ if not st.session_state.logged_in:
     st.write("Por favor, insira a senha corporativa para gerenciar as escalas.")
     senha = st.text_input("Senha de Acesso", type="password")
     if st.button("Entrar"):
-        if senha == "camarotti2026": # <-- ALTERE A SENHA AQUI
+        if senha == "camarotti2026": # <-- ALTERE A SENHA AQUI SE DESEJAR
             st.session_state.logged_in = True
             st.rerun()
         else:
@@ -107,7 +115,7 @@ menu = st.sidebar.radio("Selecione o Módulo:", [
 if menu == "📊 Dashboard Interativo":
     st.header("Dashboard da Equipe")
     
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2 = st.columns([1, 3])
     ano_atual = datetime.now().year
     mes_atual = datetime.now().month
     
@@ -116,9 +124,14 @@ if menu == "📊 Dashboard Interativo":
     with col2:
         meses = ["Resumo Anual", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         mes_selecionado = st.selectbox("Mês / Visão", meses, index=mes_atual)
-    with col3:
-        st.markdown("**Filtros:**")
-        mostrar_presencial = st.checkbox("Mostrar Presencial", value=False)
+    
+    st.markdown("**Filtros (Legenda):**")
+    col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
+    mostrar_presencial = col_f1.checkbox("🟩 Presencial", value=True)
+    mostrar_efetivas = col_f2.checkbox("🟧 Férias Efetivas", value=True)
+    mostrar_oficial = col_f3.checkbox("🟪 Férias Oficial", value=True)
+    mostrar_folga_bh = col_f4.checkbox("🟦 Folga BH", value=True)
+    mostrar_feriados = col_f5.checkbox("🟫 Feriados", value=True)
     
     st.markdown("---")
     
@@ -149,13 +162,12 @@ if menu == "📊 Dashboard Interativo":
             st.info("Nenhuma férias programada para este ano.")
 
     else:
-        # CONSTRUTOR DO CALENDÁRIO VISUAL EM HTML (Muito melhor no Streamlit)
+        # CONSTRUTOR DO CALENDÁRIO VISUAL EM HTML
         mes_num = meses.index(mes_selecionado)
         cal = calendar.monthcalendar(ano_selecionado, mes_num)
         
         eventos_mes = {d: [] for d in range(1, 32)}
         for nome, tipo, d_ini_str, d_fim_str in todos_lancamentos:
-            if tipo == "Presencial" and not mostrar_presencial: continue
             try:
                 dt_ini = datetime.strptime(d_ini_str, "%d/%m/%Y").date()
                 dt_fim = datetime.strptime(d_fim_str, "%d/%m/%Y").date()
@@ -166,7 +178,7 @@ if menu == "📊 Dashboard Interativo":
                     atual += timedelta(days=1)
             except: pass
 
-        cores = {"Presencial": "#33cc66", "Férias (Efetivas)": "#ff9933", "Férias (Oficial)": "#ff4d4d", "Folga BH": "#66a3ff"}
+        cores = {"Presencial": "#15803d", "Férias (Efetivas)": "#c2410c", "Férias (Oficial)": "#7e22ce", "Folga BH": "#1d4ed8"}
         
         html_cal = "<table style='width:100%; border-collapse: collapse; text-align:center; font-family:sans-serif;'>"
         html_cal += "<tr style='background-color:#1f538d; color:white;'><th>Dom</th><th>Seg</th><th>Ter</th><th>Qua</th><th>Qui</th><th>Sex</th><th>Sáb</th></tr>"
@@ -181,11 +193,16 @@ if menu == "📊 Dashboard Interativo":
                     bg_color = "#ffffff" if (col != 0 and col != 6) else "#f9f9f9"
                     
                     eventos_html = ""
-                    if data_str in feriados:
+                    if data_str in feriados and mostrar_feriados:
                         bg_color = "#fff0cc"
-                        eventos_html += f"<div style='color:#cc8800; font-size:12px; font-weight:bold;'>★ {feriados[data_str]}</div>"
+                        eventos_html += f"<div style='color:#b45309; font-size:12px; font-weight:bold; margin-bottom:2px;'>★ {feriados[data_str]}</div>"
                     
                     for ev_nome, ev_tipo in eventos_mes[dia]:
+                        if ev_tipo == "Presencial" and not mostrar_presencial: continue
+                        if ev_tipo == "Férias (Efetivas)" and not mostrar_efetivas: continue
+                        if ev_tipo == "Férias (Oficial)" and not mostrar_oficial: continue
+                        if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
+
                         cor_txt = cores.get(ev_tipo, "#000")
                         eventos_html += f"<div style='color:{cor_txt}; font-size:12px; font-weight:bold; margin-top:2px;'>■ {ev_nome}</div>"
                     
@@ -197,8 +214,6 @@ if menu == "📊 Dashboard Interativo":
         html_cal += "</table>"
         
         st.markdown(html_cal, unsafe_allow_html=True)
-        
-        st.markdown("<br><small><b>Legenda:</b> <span style='color:#33cc66'>■ Presencial</span> | <span style='color:#ff9933'>■ Férias Efetivas</span> | <span style='color:#ff4d4d'>■ Férias Oficial</span> | <span style='color:#66a3ff'>■ Folga BH</span></small>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 2: GESTÃO DE EQUIPE
@@ -296,11 +311,10 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
     
     st.markdown(f"**Saldo Atual:** `{d_atual} dias` | Banco de Horas: `{b_atual}h`")
     
-    # Botões na horizontal para melhor visualização
     tipo_lancamento = st.radio("O que deseja lançar?", ["Férias", "Presencial", "Folga BH"], horizontal=True)
     
     # ----------------------------------------------------
-    # LÓGICA 1: FÉRIAS (Contínuas por Data Inicial/Final)
+    # LÓGICA 1: FÉRIAS
     # ----------------------------------------------------
     if tipo_lancamento == "Férias":
         with st.form("form_ferias"):
@@ -334,7 +348,7 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                         st.rerun()
 
     # ----------------------------------------------------
-    # LÓGICA 2: PRESENCIAL E FOLGA (Dias Picados via Calendário Lote)
+    # LÓGICA 2: PRESENCIAL E FOLGA (Lote)
     # ----------------------------------------------------
     else:
         st.markdown("---")
@@ -357,43 +371,70 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
             mes_num = meses_lista.index(mes_sel) + 1
             cal_matriz = calendar.monthcalendar(ano_sel, mes_num)
             
-            # Cabeçalho da grade visual
+            cursor.execute("SELECT id, data_inicio, valor_descontado FROM lancamentos WHERE colaborador_id=%s AND tipo=%s", (colab_id, tipo_bd))
+            mapa_existentes = {}
+            for l_id, d_ini_str, v_desc in cursor.fetchall():
+                if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
+                    mapa_existentes[d_ini_str] = (l_id, v_desc)
+            
+            cursor.execute("SELECT data_inicio, tipo FROM lancamentos WHERE colaborador_id=%s AND tipo!=%s", (colab_id, tipo_bd))
+            outros_lancamentos = {}
+            for d_ini_str, t_bd in cursor.fetchall():
+                if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
+                    outros_lancamentos[d_ini_str] = t_bd
+
             dias_semana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
             cols_header = st.columns(7)
             for i, d in enumerate(dias_semana):
                 cols_header[i].markdown(f"**{d}**")
                 
-            # Linhas da grade visual (O Calendário)
             dias_marcados = []
             for semana in cal_matriz:
                 cols = st.columns(7)
                 for i, dia in enumerate(semana):
                     if dia == 0:
-                        cols[i].write("") # Espaço vazio no calendário
+                        cols[i].write("") 
                     else:
-                        # Cria uma caixinha para o dia. Se marcada, adiciona na lista de gravação.
-                        if cols[i].checkbox(str(dia), key=f"chk_lote_{dia}"):
-                            dias_marcados.append(f"{dia:02d}/{mes_num:02d}/{ano_sel}")
+                        data_str_atual = f"{dia:02d}/{mes_num:02d}/{ano_sel}"
+                        
+                        if data_str_atual in outros_lancamentos:
+                            tipo_conflito = outros_lancamentos[data_str_atual][:3] 
+                            cols[i].markdown(f"<span style='color:gray; font-size:14px;'>{dia} ({tipo_conflito})</span>", unsafe_allow_html=True)
+                        else:
+                            ja_marcado = data_str_atual in mapa_existentes
+                            if cols[i].checkbox(str(dia), value=ja_marcado, key=f"chk_lote_{dia}_{tipo_bd}_{mes_num}"):
+                                dias_marcados.append(data_str_atual)
                             
             st.markdown("<br>", unsafe_allow_html=True)
             btn_lancar_lote = st.form_submit_button(f"🚀 Gravar Lançamentos Selecionados", type="primary", use_container_width=True)
             
             if btn_lancar_lote:
-                if not dias_marcados:
-                    st.warning("Selecione pelo menos um dia no calendário acima.")
+                dias_marcados_set = set(dias_marcados)
+                dias_existentes_set = set(mapa_existentes.keys())
+                
+                dias_inserir = dias_marcados_set - dias_existentes_set
+                dias_remover = dias_existentes_set - dias_marcados_set
+                
+                if not dias_inserir and not dias_remover:
+                    st.info("Nenhuma alteração foi feita nas datas.")
                 else:
-                    for d_str in dias_marcados:
-                        # Grava 1 dia isolado para cada caixinha marcada
-                        cursor.execute("INSERT INTO lancamentos (colaborador_id, tipo, data_inicio, data_fim, numero_dias, valor_descontado) VALUES (%s, %s, %s, %s, %s, %s)",
-                                       (colab_id, tipo_bd, d_str, d_str, 1, horas_abater))
+                    for d in dias_remover:
+                        l_id, v_desc = mapa_existentes[d]
+                        cursor.execute("DELETE FROM lancamentos WHERE id=%s", (l_id,))
                         if tipo_bd == "Folga BH":
-                            cursor.execute("UPDATE colaboradores SET saldo_bh = saldo_bh - %s WHERE id = %s", (horas_abater, colab_id))
+                            cursor.execute("UPDATE colaboradores SET saldo_bh = saldo_bh + %s WHERE id=%s", (v_desc, colab_id))
                             
-                    st.success(f"{len(dias_marcados)} dia(s) de {tipo_bd} gravado(s) com sucesso!")
+                    for d in dias_inserir:
+                        cursor.execute("INSERT INTO lancamentos (colaborador_id, tipo, data_inicio, data_fim, numero_dias, valor_descontado) VALUES (%s, %s, %s, %s, %s, %s)",
+                                       (colab_id, tipo_bd, d, d, 1, horas_abater))
+                        if tipo_bd == "Folga BH":
+                            cursor.execute("UPDATE colaboradores SET saldo_bh = saldo_bh - %s WHERE id=%s", (horas_abater, colab_id))
+                            
+                    st.success(f"Escala atualizada! {len(dias_inserir)} adicionados | {len(dias_remover)} removidos.")
                     st.rerun()
                     
     # ----------------------------------------------------
-    # HISTÓRICO DO COLABORADOR (Sempre visível)
+    # HISTÓRICO DO COLABORADOR
     # ----------------------------------------------------
     st.markdown("---")
     st.subheader("Histórico de Lançamentos")
@@ -419,14 +460,46 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
 # ==========================================
 elif menu == "🌴 Gerir Feriados":
     st.header("Gestão de Feriados")
-    col1, col2 = st.columns(2)
     
+    st.subheader("🌐 Importar Feriados Nacionais (BrasilAPI)")
+    st.markdown("Busca automaticamente os feriados nacionais usando a BrasilAPI e adiciona ao calendário.")
+    
+    with st.form("form_api"):
+        col_ano, col_btn = st.columns([1, 3])
+        ano_api = col_ano.number_input("Ano", value=datetime.now().year, step=1)
+        submit_api = col_btn.form_submit_button("📥 Buscar da BrasilAPI", use_container_width=True)
+        
+        if submit_api:
+            try:
+                response = requests.get(f"https://brasilapi.com.br/api/feriados/v1/{ano_api}")
+                if response.status_code == 200:
+                    feriados_api = response.json()
+                    inseridos = 0
+                    for f in feriados_api:
+                        d_obj = datetime.strptime(f['date'], "%Y-%m-%d")
+                        d_str = d_obj.strftime("%d/%m/%Y")
+                        desc = f['name']
+                        
+                        cursor.execute("SELECT id FROM feriados WHERE data_feriado=%s", (d_str,))
+                        if not cursor.fetchone():
+                            cursor.execute("INSERT INTO feriados (data_feriado, descricao) VALUES (%s, %s)", (d_str, desc))
+                            inseridos += 1
+                            
+                    st.success(f"Sucesso! {inseridos} novos feriados importados para {ano_api}.")
+                else:
+                    st.error("A API não encontrou feriados para este ano ou está indisponível.")
+            except Exception as e:
+                st.error(f"Erro ao conectar com a BrasilAPI: {e}")
+                
+    st.markdown("---")
+
+    col1, col2 = st.columns(2)
     with col1:
         with st.form("form_feriado"):
-            st.subheader("Novo Feriado")
+            st.subheader("Cadastrar Feriado Manual")
             data_f = st.date_input("Data do Feriado", format="DD/MM/YYYY")
-            desc_f = st.text_input("Descrição (Ex: Natal)")
-            if st.form_submit_button("Salvar Feriado", use_container_width=True):
+            desc_f = st.text_input("Descrição (Ex: Aniversário da Cidade)")
+            if st.form_submit_button("Salvar Feriado Manual", use_container_width=True):
                 try:
                     cursor.execute("INSERT INTO feriados (data_feriado, descricao) VALUES (%s, %s)", (data_f.strftime("%d/%m/%Y"), desc_f))
                     st.success("Feriado salvo!")
@@ -437,8 +510,12 @@ elif menu == "🌴 Gerir Feriados":
     with col2:
         st.subheader("Feriados Cadastrados")
         cursor.execute("SELECT id, data_feriado, descricao FROM feriados")
-        for fid, dt, desc in cursor.fetchall():
-            cc1, cc2 = st.columns([3, 1])
+        feriados_banco = cursor.fetchall()
+        
+        feriados_banco.sort(key=lambda x: datetime.strptime(x[1], "%d/%m/%Y"), reverse=True)
+        
+        for fid, dt, desc in feriados_banco:
+            cc1, cc2 = st.columns([4, 1])
             cc1.write(f"★ **{dt}** - {desc}")
             if cc2.button("🗑️", key=f"fdel_{fid}"):
                 cursor.execute("DELETE FROM feriados WHERE id=%s", (fid,))
