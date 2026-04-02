@@ -376,14 +376,11 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
             
             col1, col2 = st.columns(2)
             d_inicio = col1.date_input("Data de Início", format="DD/MM/YYYY")
-            
-            # Aqui mudamos para pedir a Quantidade de Dias em vez da Data Fim!
             qtd_dias_input = col2.number_input("Quantidade de Dias", value=20, min_value=1, step=1)
             
             btn_lancar = st.form_submit_button("🚀 Gravar Férias", type="primary", use_container_width=True)
             
             if btn_lancar:
-                # O sistema calcula automaticamente a data final somando os dias
                 d_fim = d_inicio + timedelta(days=qtd_dias_input - 1)
                 qtd_dias = qtd_dias_input
                 
@@ -437,6 +434,10 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                 if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
                     outros_lancamentos[d_ini_str] = t_bd
 
+            # Buscando feriados para travar a grade
+            cursor.execute("SELECT data_feriado, descricao FROM feriados")
+            feriados_lote = {linha[0]: linha[1] for linha in cursor.fetchall()}
+
             dias_semana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
             cols_header = st.columns(7)
             for i, d in enumerate(dias_semana):
@@ -457,9 +458,19 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                         else:
                             ja_marcado = data_str_atual in mapa_existentes
                             
+                            is_weekend = (i == 0 or i == 6) # Coluna 0 é Domingo, 6 é Sábado
+                            is_feriado = data_str_atual in feriados_lote
+                            
+                            label_caixa = str(dia)
+                            if is_feriado:
+                                label_caixa = f"{dia} (Feriado)"
+                                
+                            # Trava a caixinha se for Fim de Semana ou Feriado
+                            desabilitar = is_weekend or is_feriado
+                            
                             key_checkbox = f"chk_lote_{colab_id}_{dia}_{tipo_bd}_{mes_num}_{ano_sel}"
                             
-                            if cols[i].checkbox(str(dia), value=ja_marcado, key=key_checkbox):
+                            if cols[i].checkbox(label_caixa, value=ja_marcado, disabled=desabilitar, key=key_checkbox):
                                 dias_marcados.append(data_str_atual)
                             
             st.markdown("<br>", unsafe_allow_html=True)
