@@ -412,7 +412,6 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
             horas_abater = 0
             tipo_bd = "Presencial"
             
-        # Retirado de dentro do form para recarregar o grid instantaneamente
         col_m, col_a = st.columns(2)
         meses_lista = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         mes_sel = col_m.selectbox("Mês Alvo", meses_lista, index=datetime.now().month - 1)
@@ -427,11 +426,19 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
             if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
                 mapa_existentes[d_ini_str] = (l_id, v_desc)
         
-        cursor.execute("SELECT data_inicio, tipo FROM lancamentos WHERE colaborador_id=%s AND tipo!=%s", (colab_id, tipo_bd))
+        cursor.execute("SELECT data_inicio, data_fim, tipo FROM lancamentos WHERE colaborador_id=%s AND tipo!=%s", (colab_id, tipo_bd))
         outros_lancamentos = {}
-        for d_ini_str, t_bd in cursor.fetchall():
-            if d_ini_str.endswith(f"/{mes_num:02d}/{ano_sel}"):
-                outros_lancamentos[d_ini_str] = t_bd
+        for d_ini_str, d_fim_str, t_bd in cursor.fetchall():
+            try:
+                dt_ini = datetime.strptime(d_ini_str, "%d/%m/%Y")
+                dt_fim = datetime.strptime(d_fim_str, "%d/%m/%Y")
+                atual = dt_ini
+                while atual <= dt_fim:
+                    if atual.month == mes_num and atual.year == ano_sel:
+                        outros_lancamentos[atual.strftime("%d/%m/%Y")] = t_bd
+                    atual += timedelta(days=1)
+            except:
+                pass
 
         cursor.execute("SELECT data_feriado, descricao FROM feriados")
         feriados_lote = {linha[0]: linha[1] for linha in cursor.fetchall()}
@@ -452,24 +459,37 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                     else:
                         data_str_atual = f"{dia:02d}/{mes_num:02d}/{ano_sel}"
                         
-                        if data_str_atual in outros_lancamentos:
-                            tipo_conflito = outros_lancamentos[data_str_atual][:3] 
-                            cols[i].markdown(f"<span style='color:gray; font-size:14px;'>{dia} ({tipo_conflito})</span>", unsafe_allow_html=True)
+                        ja_marcado = False
+                        desabilitar = False
+                        label_caixa = str(dia)
+                        
+                        is_weekend = (i == 0 or i == 6)
+                        is_feriado = data_str_atual in feriados_lote
+                        is_conflito = data_str_atual in outros_lancamentos
+                        
+                        if is_conflito:
+                            tipo_conflito = outros_lancamentos[data_str_atual]
+                            if "Férias" in tipo_conflito:
+                                label_caixa = f"{dia} (Férias)"
+                            elif "Folga" in tipo_conflito:
+                                label_caixa = f"{dia} (Folga)"
+                            else:
+                                label_caixa = f"{dia} ({tipo_conflito[:3]})"
+                            desabilitar = True
+                        elif is_feriado:
+                            label_caixa = f"{dia} (Feriado)"
+                            ja_marcado = data_str_atual in mapa_existentes
+                            desabilitar = True
                         else:
                             ja_marcado = data_str_atual in mapa_existentes
-                            
-                            is_weekend = (i == 0 or i == 6)
-                            is_feriado = data_str_atual in feriados_lote
-                            
-                            label_caixa = str(dia)
-                            if is_feriado:
-                                label_caixa = f"{dia} (Feriado)"
+                            if is_weekend:
+                                desabilitar = True
                                 
-                            desabilitar = is_weekend or is_feriado
-                            
-                            key_checkbox = f"chk_lote_{colab_id}_{dia}_{tipo_bd}_{mes_num}_{ano_sel}"
-                            
-                            if cols[i].checkbox(label_caixa, value=ja_marcado, disabled=desabilitar, key=key_checkbox):
+                        key_checkbox = f"chk_lote_{colab_id}_{dia}_{tipo_bd}_{mes_num}_{ano_sel}"
+                        
+                        if cols[i].checkbox(label_caixa, value=ja_marcado, disabled=desabilitar, key=key_checkbox):
+                            # Só adicionamos na lista de gravação se não for um conflito
+                            if not is_conflito:
                                 dias_marcados.append(data_str_atual)
                             
             st.markdown("<br>", unsafe_allow_html=True)
