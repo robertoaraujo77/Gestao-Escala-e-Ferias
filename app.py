@@ -48,7 +48,7 @@ if not st.session_state.logged_in:
     st.write("Por favor, insira a senha corporativa para gerenciar as escalas.")
     senha = st.text_input("Senha de Acesso", type="password")
     if st.button("Entrar"):
-        if senha == st.secrets["senha_acesso"]:
+        if senha == st.secrets["senha_acesso"]: 
             st.session_state.logged_in = True
             st.rerun()
         else:
@@ -58,6 +58,29 @@ if not st.session_state.logged_in:
 # ==========================================
 # MOTORES DE CÁLCULO E LÓGICA
 # ==========================================
+def calcular_vencimento(data_adm):
+    """Calcula o vencimento das férias baseado na admissão"""
+    try:
+        hoje = date.today()
+        try:
+            aniv = data_adm.replace(year=hoje.year)
+        except ValueError:
+            aniv = data_adm.replace(year=hoje.year, day=28)
+            
+        if aniv > hoje: 
+            try:
+                aniv = data_adm.replace(year=hoje.year - 1)
+            except ValueError:
+                aniv = data_adm.replace(year=hoje.year - 1, day=28)
+
+        mes_venc, ano_venc = aniv.month - 1, aniv.year + 1
+        if mes_venc == 0: 
+            mes_venc, ano_venc = 12, ano_venc - 1
+        dia_venc = min(aniv.day, monthrange(ano_venc, mes_venc)[1])
+        return date(ano_venc, mes_venc, dia_venc).strftime("%d/%m/%Y")
+    except: 
+        return ""
+
 def get_saldos(colab_id):
     cursor.execute("SELECT dias_pendentes, saldo_bh FROM colaboradores WHERE id=%s", (colab_id,))
     res = cursor.fetchone()
@@ -135,7 +158,6 @@ if menu == "📊 Dashboard Interativo":
     
     st.markdown("---")
     
-    # Cache de Lançamentos
     cursor.execute("SELECT c.nome, l.tipo, l.data_inicio, l.data_fim FROM lancamentos l JOIN colaboradores c ON l.colaborador_id = c.id WHERE c.ativo = 1")
     todos_lancamentos = cursor.fetchall()
     
@@ -162,7 +184,6 @@ if menu == "📊 Dashboard Interativo":
             st.info("Nenhuma férias programada para este ano.")
 
     else:
-        # CONSTRUTOR DO CALENDÁRIO VISUAL EM HTML
         mes_num = meses.index(mes_selecionado)
         cal = calendar.monthcalendar(ano_selecionado, mes_num)
         
@@ -244,8 +265,9 @@ elif menu == "👥 Gestão de Equipe":
                 
                 if st.form_submit_button("💾 Salvar Colaborador", use_container_width=True):
                     try:
-                        cursor.execute("INSERT INTO colaboradores (nome, funcao, area, admissao, dias_pendentes, saldo_bh) VALUES (%s, %s, %s, %s, %s, %s)", 
-                                       (nome, funcao, area, admissao.strftime("%d/%m/%Y"), d_pendentes, bh_inicial))
+                        venc_ferias = calcular_vencimento(admissao)
+                        cursor.execute("INSERT INTO colaboradores (nome, funcao, area, admissao, venc_ferias, dias_pendentes, saldo_bh) VALUES (%s, %s, %s, %s, %s, %s, %s)", 
+                                       (nome, funcao, area, admissao.strftime("%d/%m/%Y"), venc_ferias, d_pendentes, bh_inicial))
                         st.success("Colaborador cadastrado!")
                         st.rerun()
                     except Exception as e:
@@ -254,41 +276,76 @@ elif menu == "👥 Gestão de Equipe":
             idx = lista_nomes.index(escolha) - 1
             colab_id = colaboradores[idx][0]
             
-            cursor.execute("SELECT nome, funcao, area, admissao, ativo FROM colaboradores WHERE id=%s", (colab_id,))
+            cursor.execute("SELECT nome, funcao, area, admissao, venc_ferias, ativo FROM colaboradores WHERE id=%s", (colab_id,))
             dados = cursor.fetchone()
             d_atual, b_atual, d_db, b_db, f_efe, f_ofic, f_bh = get_saldos(colab_id)
             
-            st.subheader(f"Editando: {dados[0]}")
+            # --- HEADER BONITO (Igual ao .exe) ---
+            c_h1, c_h2, c_h3 = st.columns([2, 1, 1])
+            c_h1.subheader(dados[0])
+            c_h2.markdown(f"<div style='background-color:#fff2e6; color:#cc6600; padding:10px; border-radius:5px; text-align:center; font-weight:bold; border: 1px solid #ffcc99;'>✈ Dias Pendentes: {d_atual}</div>", unsafe_allow_html=True)
+            c_h3.markdown(f"<div style='background-color:#e6f2ff; color:#005ce6; padding:10px; border-radius:5px; text-align:center; font-weight:bold; border: 1px solid #99c2ff;'>⏳ Banco de Horas: {b_atual}h</div>", unsafe_allow_html=True)
             
-            st.info(f"**Saldo Atual (Neste mês):** {d_atual} dias pendentes | {b_atual}h no Banco")
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Aviso de Lançamentos Futuros (Se houver)
             if f_efe > 0 or f_ofic > 0 or f_bh > 0:
-                st.warning(f"📅 **Projetado (Futuro):** +{f_ofic}d (Assinar) | -{f_efe}d (Efetivas) | -{f_bh}h (Folga)")
+                msg_futuro = "📅 **Agendado para meses futuros:**"
+                if f_ofic > 0: msg_futuro += f" &nbsp; `+{f_ofic}d (Assinar)`"
+                if f_efe > 0: msg_futuro += f" &nbsp; `-{f_efe}d (Efetivas)`"
+                if f_bh > 0: msg_futuro += f" &nbsp; `-{f_bh}h (Folga)`"
+                st.warning(msg_futuro)
 
             with st.form("form_edita_colab"):
                 nome = st.text_input("Nome Completo", value=dados[0])
                 funcao = st.text_input("Função", value=dados[1])
                 area = st.text_input("Área", value=dados[2])
+                
+                # Proteção para garantir que a data não quebre na conversão
+                try:
+                    data_adm_obj = datetime.strptime(dados[3], "%d/%m/%Y").date()
+                except:
+                    try:
+                        data_adm_obj = datetime.strptime(dados[3], "%Y-%m-%d").date()
+                    except:
+                        data_adm_obj = date.today()
+                    
+                admissao = st.date_input("Data de Admissão", value=data_adm_obj, format="DD/MM/YYYY")
+                st.text_input("Vencimento Férias (Calculado após Atualizar)", value=dados[4] if dados[4] else "Não calculado", disabled=True)
+                
                 d_pendentes = st.number_input("Dias Pendentes (Mês Atual)", value=int(d_atual), step=1)
                 bh_atual_input = st.number_input("Saldo Banco de Horas (Mês Atual)", value=float(b_atual), step=0.5)
                 
-                col_btn1, col_btn2 = st.columns(2)
+                st.markdown("<br>", unsafe_allow_html=True)
+                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                
                 with col_btn1:
-                    submit = st.form_submit_button("💾 Salvar Alterações", use_container_width=True)
+                    submit = st.form_submit_button("💾 Atualizar", type="primary", use_container_width=True)
                 with col_btn2:
-                    btn_status = "Arquivar" if dados[4] == 1 else "Reativar"
-                    status_submit = st.form_submit_button(f"📦 {btn_status} Colaborador", use_container_width=True)
+                    btn_status = "Arquivar" if dados[5] == 1 else "Reativar"
+                    status_submit = st.form_submit_button(f"📦 {btn_status}", use_container_width=True)
+                with col_btn3:
+                    # Botão de Exclusão Definitiva Retornado!
+                    excluir_submit = st.form_submit_button("🗑️ Excluir Definitivo", use_container_width=True)
 
                 if submit:
+                    novo_venc_ferias = calcular_vencimento(admissao)
                     novo_d_db = d_pendentes - f_efe + f_ofic
                     novo_b_db = bh_atual_input - f_bh
-                    cursor.execute("UPDATE colaboradores SET nome=%s, funcao=%s, area=%s, dias_pendentes=%s, saldo_bh=%s WHERE id=%s", 
-                                   (nome, funcao, area, novo_d_db, novo_b_db, colab_id))
+                    cursor.execute("UPDATE colaboradores SET nome=%s, funcao=%s, area=%s, admissao=%s, venc_ferias=%s, dias_pendentes=%s, saldo_bh=%s WHERE id=%s", 
+                                   (nome, funcao, area, admissao.strftime("%d/%m/%Y"), novo_venc_ferias, novo_d_db, novo_b_db, colab_id))
                     st.success("Atualizado!")
                     st.rerun()
                 
                 if status_submit:
-                    novo_st = 0 if dados[4] == 1 else 1
+                    novo_st = 0 if dados[5] == 1 else 1
                     cursor.execute("UPDATE colaboradores SET ativo=%s WHERE id=%s", (novo_st, colab_id))
+                    st.rerun()
+
+                if excluir_submit:
+                    # Apaga primeiro os registros da escala para não dar erro de vínculo e depois exclui a pessoa
+                    cursor.execute("DELETE FROM lancamentos WHERE colaborador_id=%s", (colab_id,))
+                    cursor.execute("DELETE FROM colaboradores WHERE id=%s", (colab_id,))
                     st.rerun()
 
 # ==========================================
@@ -348,7 +405,7 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                         st.rerun()
 
     # ----------------------------------------------------
-    # LÓGICA 2: PRESENCIAL E FOLGA (Lote)
+    # LÓGICA 2: PRESENCIAL E FOLGA (Dias Picados via Lote)
     # ----------------------------------------------------
     else:
         st.markdown("---")
@@ -402,7 +459,11 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
                             cols[i].markdown(f"<span style='color:gray; font-size:14px;'>{dia} ({tipo_conflito})</span>", unsafe_allow_html=True)
                         else:
                             ja_marcado = data_str_atual in mapa_existentes
-                            if cols[i].checkbox(str(dia), value=ja_marcado, key=f"chk_lote_{dia}_{tipo_bd}_{mes_num}"):
+                            
+                            # A SOLUÇÃO: Adicionado o colab_id na chave do checkbox para evitar mistura de memórias!
+                            key_checkbox = f"chk_lote_{colab_id}_{dia}_{tipo_bd}_{mes_num}_{ano_sel}"
+                            
+                            if cols[i].checkbox(str(dia), value=ja_marcado, key=key_checkbox):
                                 dias_marcados.append(data_str_atual)
                             
             st.markdown("<br>", unsafe_allow_html=True)
@@ -467,6 +528,10 @@ elif menu == "🌴 Gerir Feriados":
     with st.form("form_api"):
         col_ano, col_btn = st.columns([1, 3])
         ano_api = col_ano.number_input("Ano", value=datetime.now().year, step=1)
+        
+        # A SOLUÇÃO: Espaçamento de alinhamento perfeito para botões ao lado de inputs
+        col_btn.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        
         submit_api = col_btn.form_submit_button("📥 Buscar da BrasilAPI", use_container_width=True)
         
         if submit_api:
