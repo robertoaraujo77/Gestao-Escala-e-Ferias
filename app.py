@@ -347,7 +347,7 @@ elif menu == "👥 Gestão de Equipe":
 # ==========================================
 # MÓDULO 3: LANÇAMENTOS 
 # ==========================================
-elif menu == "✈️ Lançamentos (Férias e Folgas)":
+elif menu == "✈️ Lançamentos":
     st.header("Lançamentos Individuais")
     
     cursor.execute("SELECT id, nome FROM colaboradores WHERE ativo = 1 ORDER BY nome ASC")
@@ -429,7 +429,6 @@ elif menu == "✈️ Lançamentos (Férias e Folgas)":
         cursor.execute("SELECT data_inicio, data_fim, tipo FROM lancamentos WHERE colaborador_id=%s AND tipo!=%s", (colab_id, tipo_bd))
         outros_lancamentos = {}
         for d_ini_str, d_fim_str, t_bd in cursor.fetchall():
-            # A CORREÇÃO: Pula as Férias Oficiais para não bloquear a grade!
             if t_bd == "Férias (Oficial)":
                 continue
                 
