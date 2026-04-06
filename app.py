@@ -58,29 +58,6 @@ if not st.session_state.logged_in:
 # ==========================================
 # MOTORES DE CÁLCULO E LÓGICA
 # ==========================================
-def calcular_vencimento(data_adm):
-    """Calcula o vencimento das férias baseado na admissão"""
-    try:
-        hoje = date.today()
-        try:
-            aniv = data_adm.replace(year=hoje.year)
-        except ValueError:
-            aniv = data_adm.replace(year=hoje.year, day=28)
-            
-        if aniv > hoje: 
-            try:
-                aniv = data_adm.replace(year=hoje.year - 1)
-            except ValueError:
-                aniv = data_adm.replace(year=hoje.year - 1, day=28)
-
-        mes_venc, ano_venc = aniv.month - 1, aniv.year + 1
-        if mes_venc == 0: 
-            mes_venc, ano_venc = 12, ano_venc - 1
-        dia_venc = min(aniv.day, monthrange(ano_venc, mes_venc)[1])
-        return date(ano_venc, mes_venc, dia_venc).strftime("%d/%m/%Y")
-    except: 
-        return ""
-
 def get_saldos(colab_id):
     cursor.execute("SELECT dias_pendentes, saldo_bh FROM colaboradores WHERE id=%s", (colab_id,))
     res = cursor.fetchone()
@@ -138,6 +115,37 @@ menu = st.sidebar.radio("Selecione o Módulo:", [
 if menu == "📊 Dashboard Interativo":
     st.header("Dashboard da Equipe")
     
+    # ----------------------------------------------------
+    # SISTEMA DE ALERTA DP (45 DIAS ANTES DA DATA LIMITE)
+    # ----------------------------------------------------
+    cursor.execute("SELECT nome, venc_ferias FROM colaboradores WHERE ativo = 1")
+    alertas_aviso = []
+    alertas_vencidos = []
+    hoje_date = date.today()
+    
+    for nome, venc_str in cursor.fetchall():
+        if venc_str:
+            try:
+                dt_limite = datetime.strptime(venc_str, "%d/%m/%Y").date()
+                dt_prazo_gestor = dt_limite - timedelta(days=45)
+                dif_dias = (dt_prazo_gestor - hoje_date).days
+                
+                if 0 <= dif_dias <= 45:
+                    alertas_aviso.append(f"⚠️ **{nome}**: Enviar pedido de férias ao DP até **{dt_prazo_gestor.strftime('%d/%m/%Y')}** (Prazo vence em {dif_dias} dias!)")
+                elif dif_dias < 0:
+                    alertas_vencidos.append(f"🚨 **{nome}**: Prazo de envio ao DP **VENCIDO**! (Era até {dt_prazo_gestor.strftime('%d/%m/%Y')})")
+            except:
+                pass
+    
+    if alertas_vencidos or alertas_aviso:
+        with st.container():
+            for a in alertas_vencidos:
+                st.error(a)
+            for a in alertas_aviso:
+                st.warning(a)
+        st.markdown("<br>", unsafe_allow_html=True)
+    # ----------------------------------------------------
+
     col1, col2 = st.columns([1, 3])
     ano_atual = datetime.now().year
     mes_atual = datetime.now().month
@@ -260,14 +268,14 @@ elif menu == "👥 Gestão de Equipe":
                 funcao = st.text_input("Função")
                 area = st.text_input("Área")
                 admissao = st.date_input("Data de Admissão", format="DD/MM/YYYY")
+                data_limite = st.date_input("Data Limite (Baseada na Planilha DP)", format="DD/MM/YYYY")
                 d_pendentes = st.number_input("Dias Pendentes (Saldo Inicial)", value=0, step=1)
                 bh_inicial = st.number_input("Saldo Banco de Horas Inicial", value=0.0, step=0.5)
                 
                 if st.form_submit_button("💾 Salvar Colaborador", use_container_width=True):
                     try:
-                        venc_ferias = calcular_vencimento(admissao)
                         cursor.execute("INSERT INTO colaboradores (nome, funcao, area, admissao, venc_ferias, dias_pendentes, saldo_bh) VALUES (%s, %s, %s, %s, %s, %s, %s)", 
-                                       (nome, funcao, area, admissao.strftime("%d/%m/%Y"), venc_ferias, d_pendentes, bh_inicial))
+                                       (nome, funcao, area, admissao.strftime("%d/%m/%Y"), data_limite.strftime("%d/%m/%Y"), d_pendentes, bh_inicial))
                         st.success("Colaborador cadastrado!")
                         st.rerun()
                     except Exception as e:
@@ -307,9 +315,14 @@ elif menu == "👥 Gestão de Equipe":
                         data_adm_obj = datetime.strptime(dados[3], "%Y-%m-%d").date()
                     except:
                         data_adm_obj = date.today()
+                
+                try:
+                    data_limite_obj = datetime.strptime(dados[4], "%d/%m/%Y").date()
+                except:
+                    data_limite_obj = date.today()
                     
                 admissao = st.date_input("Data de Admissão", value=data_adm_obj, format="DD/MM/YYYY")
-                st.text_input("Vencimento Férias (Calculado após Atualizar)", value=dados[4] if dados[4] else "Não calculado", disabled=True)
+                data_limite = st.date_input("Data Limite (Baseada na Planilha DP)", value=data_limite_obj, format="DD/MM/YYYY")
                 
                 d_pendentes = st.number_input("Dias Pendentes (Mês Atual)", value=int(d_atual), step=1)
                 bh_atual_input = st.number_input("Saldo Banco de Horas (Mês Atual)", value=float(b_atual), step=0.5)
@@ -326,11 +339,10 @@ elif menu == "👥 Gestão de Equipe":
                     excluir_submit = st.form_submit_button("🗑️ Excluir Definitivo", use_container_width=True)
 
                 if submit:
-                    novo_venc_ferias = calcular_vencimento(admissao)
                     novo_d_db = d_pendentes - f_efe + f_ofic
                     novo_b_db = bh_atual_input - f_bh
                     cursor.execute("UPDATE colaboradores SET nome=%s, funcao=%s, area=%s, admissao=%s, venc_ferias=%s, dias_pendentes=%s, saldo_bh=%s WHERE id=%s", 
-                                   (nome, funcao, area, admissao.strftime("%d/%m/%Y"), novo_venc_ferias, novo_d_db, novo_b_db, colab_id))
+                                   (nome, funcao, area, admissao.strftime("%d/%m/%Y"), data_limite.strftime("%d/%m/%Y"), novo_d_db, novo_b_db, colab_id))
                     st.success("Atualizado!")
                     st.rerun()
                 
