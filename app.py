@@ -116,25 +116,39 @@ if menu == "📊 Dashboard Interativo":
     st.header("Dashboard da Equipe")
     
     # ----------------------------------------------------
-    # SISTEMA DE ALERTA DP (SOMENTE SE TIVER SALDO PENDENTE)
+    # SISTEMA DE ALERTA DP (LÓGICA INTELIGENTE CLT)
     # ----------------------------------------------------
-    cursor.execute("SELECT nome, venc_ferias, dias_pendentes FROM colaboradores WHERE ativo = 1")
+    cursor.execute("SELECT id, nome, venc_ferias FROM colaboradores WHERE ativo = 1")
     alertas_aviso = []
     alertas_vencidos = []
     hoje_date = date.today()
     
-    for nome, venc_str, dias_pendentes in cursor.fetchall():
-        # A MÁGICA: Só entra no alerta se o cara ainda tiver dias de férias pendentes!
-        if venc_str and dias_pendentes > 0:
+    for colab_id, nome, venc_str in cursor.fetchall():
+        if venc_str:
             try:
                 dt_limite = datetime.strptime(venc_str, "%d/%m/%Y").date()
                 dt_prazo_gestor = dt_limite - timedelta(days=45)
                 dif_dias = (dt_prazo_gestor - hoje_date).days
                 
-                if 0 <= dif_dias <= 45:
-                    alertas_aviso.append(f"⚠️ **{nome}**: Enviar pedido de férias ao DP até **{dt_prazo_gestor.strftime('%d/%m/%Y')}** (Prazo vence em {dif_dias} dias!)")
-                elif dif_dias < 0:
-                    alertas_vencidos.append(f"🚨 **{nome}**: Prazo de envio ao DP **VENCIDO**! (Era até {dt_prazo_gestor.strftime('%d/%m/%Y')})")
+                # O PULO DO GATO: Verifica se o gestor já lançou qualquer Férias para cobrir este prazo.
+                # Como as férias devem ser tiradas no período concessivo (1 ano antes da data limite),
+                # se houver um lançamento nesse intervalo, o sistema sabe que a pendência foi resolvida!
+                cursor.execute("SELECT data_inicio FROM lancamentos WHERE colaborador_id=%s AND tipo LIKE 'Férias%%'", (colab_id,))
+                ja_resolveu = False
+                for (d_ini_str,) in cursor.fetchall():
+                    try:
+                        dt_ini_lancamento = datetime.strptime(d_ini_str, "%d/%m/%Y").date()
+                        if dt_ini_lancamento >= (dt_limite - timedelta(days=365)):
+                            ja_resolveu = True
+                            break
+                    except:
+                        pass
+                
+                if not ja_resolveu:
+                    if 0 <= dif_dias <= 45:
+                        alertas_aviso.append(f"⚠️ **{nome}**: Enviar pedido de férias ao DP até **{dt_prazo_gestor.strftime('%d/%m/%Y')}** (Prazo vence em {dif_dias} dias!)")
+                    elif dif_dias < 0:
+                        alertas_vencidos.append(f"🚨 **{nome}**: Prazo de envio ao DP **VENCIDO**! (Era até {dt_prazo_gestor.strftime('%d/%m/%Y')})")
             except:
                 pass
     
