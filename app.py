@@ -116,15 +116,16 @@ if menu == "📊 Dashboard Interativo":
     st.header("Dashboard da Equipe")
     
     # ----------------------------------------------------
-    # SISTEMA DE ALERTA DP (45 DIAS ANTES DA DATA LIMITE)
+    # SISTEMA DE ALERTA DP (SOMENTE SE TIVER SALDO PENDENTE)
     # ----------------------------------------------------
-    cursor.execute("SELECT nome, venc_ferias FROM colaboradores WHERE ativo = 1")
+    cursor.execute("SELECT nome, venc_ferias, dias_pendentes FROM colaboradores WHERE ativo = 1")
     alertas_aviso = []
     alertas_vencidos = []
     hoje_date = date.today()
     
-    for nome, venc_str in cursor.fetchall():
-        if venc_str:
+    for nome, venc_str, dias_pendentes in cursor.fetchall():
+        # A MÁGICA: Só entra no alerta se o cara ainda tiver dias de férias pendentes!
+        if venc_str and dias_pendentes > 0:
             try:
                 dt_limite = datetime.strptime(venc_str, "%d/%m/%Y").date()
                 dt_prazo_gestor = dt_limite - timedelta(days=45)
