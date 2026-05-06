@@ -3,6 +3,7 @@ import psycopg2
 import pandas as pd
 import calendar
 import requests
+import io
 from datetime import datetime, date, timedelta
 from calendar import monthrange
 
@@ -130,9 +131,6 @@ if menu == "📊 Dashboard Interativo":
                 dt_prazo_gestor = dt_limite - timedelta(days=45)
                 dif_dias = (dt_prazo_gestor - hoje_date).days
                 
-                # O PULO DO GATO: Verifica se o gestor já lançou qualquer Férias para cobrir este prazo.
-                # Como as férias devem ser tiradas no período concessivo (1 ano antes da data limite),
-                # se houver um lançamento nesse intervalo, o sistema sabe que a pendência foi resolvida!
                 cursor.execute("SELECT data_inicio FROM lancamentos WHERE colaborador_id=%s AND tipo LIKE 'Férias%%'", (colab_id,))
                 ja_resolveu = False
                 for (d_ini_str,) in cursor.fetchall():
@@ -202,7 +200,23 @@ if menu == "📊 Dashboard Interativo":
         
         if dados_resumo:
             df_resumo = pd.DataFrame(dados_resumo).sort_values(by="SortDate").drop(columns=["SortDate"])
-            st.dataframe(df_resumo, use_container_width=True)
+            
+            c_res1, c_res2 = st.columns([5, 1])
+            with c_res1:
+                st.dataframe(df_resumo, use_container_width=True)
+            with c_res2:
+                # Gerador de Excel para Resumo Anual
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_resumo.to_excel(writer, index=False, sheet_name=f'Férias_{ano_selecionado}')
+                
+                st.download_button(
+                    label="📥 Exportar Excel",
+                    data=output.getvalue(),
+                    file_name=f'Resumo_Ferias_{ano_selecionado}.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True
+                )
         else:
             st.info("Nenhuma férias programada para este ano.")
 
@@ -218,9 +232,64 @@ if menu == "📊 Dashboard Interativo":
                 atual = dt_ini
                 while atual <= dt_fim:
                     if atual.month == mes_num and atual.year == ano_selecionado:
-                        eventos_mes[atual.day].append((nome.split()[0], tipo))
+                        eventos_mes[atual.day].append((nome, tipo)) # Alterado para manter o nome completo para o Excel
                     atual += timedelta(days=1)
             except: pass
+            
+        # ====================================================
+        # GERADOR DA MATRIZ DO EXCEL
+        # ====================================================
+        cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 ORDER BY nome ASC")
+        todos_colabs_export = [row[0] for row in cursor.fetchall()]
+        dias_no_mes = calendar.monthrange(ano_selecionado, mes_num)[1]
+        
+        matriz_dados = []
+        row_feriados = {"Colaborador": "★ FERIADOS ★"}
+        for dia in range(1, dias_no_mes + 1):
+            data_str = f"{dia:02d}/{mes_num:02d}/{ano_selecionado}"
+            row_feriados[str(dia)] = feriados.get(data_str, "")
+        matriz_dados.append(row_feriados)
+
+        for nome_colab in todos_colabs_export:
+            row = {"Colaborador": nome_colab}
+            for dia in range(1, dias_no_mes + 1): row[str(dia)] = ""
+            matriz_dados.append(row)
+
+        df_export = pd.DataFrame(matriz_dados)
+        df_export.set_index("Colaborador", inplace=True)
+        siglas_export = {"Presencial": "P", "Férias (Efetivas)": "Fér (Ef)", "Férias (Oficial)": "Fér (Of)", "Folga BH": "Folga"}
+
+        for dia, eventos in eventos_mes.items():
+            if dia > dias_no_mes: continue
+            for ev_nome_full, ev_tipo in eventos:
+                if ev_tipo == "Presencial" and not mostrar_presencial: continue
+                if ev_tipo == "Férias (Efetivas)" and not mostrar_efetivas: continue
+                if ev_tipo == "Férias (Oficial)" and not mostrar_oficial: continue
+                if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
+                
+                if ev_nome_full in df_export.index:
+                    df_export.at[ev_nome_full, str(dia)] = siglas_export.get(ev_tipo, ev_tipo)
+
+        df_export.reset_index(inplace=True)
+        leg_row = {"Colaborador": "LEGENDA: P = Presencial | Fér (Ef) = Férias Efetivas | Fér (Of) = Férias Oficial | Folga = Folga BH"}
+        for dia in range(1, dias_no_mes + 1): leg_row[str(dia)] = ""
+        df_export.loc[len(df_export)] = leg_row
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_export.to_excel(writer, index=False, sheet_name=f'{mes_selecionado}_{ano_selecionado}')
+        # ====================================================
+
+        # Cabeçalho da grade visual
+        c_cal1, c_cal2 = st.columns([5, 1])
+        c_cal1.markdown(f"### Grade de {mes_selecionado}")
+        c_cal2.download_button(
+            label="📥 Exportar Matriz (Excel)",
+            data=output.getvalue(),
+            file_name=f'Escala_Matriz_{mes_selecionado}_{ano_selecionado}.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            use_container_width=True
+        )
 
         cores = {"Presencial": "#15803d", "Férias (Efetivas)": "#c2410c", "Férias (Oficial)": "#7e22ce", "Folga BH": "#1d4ed8"}
         
@@ -241,13 +310,14 @@ if menu == "📊 Dashboard Interativo":
                         bg_color = "#fff0cc"
                         eventos_html += f"<div style='color:#b45309; font-size:12px; font-weight:bold; margin-bottom:2px;'>★ {feriados[data_str]}</div>"
                     
-                    for ev_nome, ev_tipo in eventos_mes[dia]:
+                    for ev_nome_full, ev_tipo in eventos_mes[dia]:
                         if ev_tipo == "Presencial" and not mostrar_presencial: continue
                         if ev_tipo == "Férias (Efetivas)" and not mostrar_efetivas: continue
                         if ev_tipo == "Férias (Oficial)" and not mostrar_oficial: continue
                         if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
 
                         cor_txt = cores.get(ev_tipo, "#000")
+                        ev_nome = ev_nome_full.split()[0] # Pega só o primeiro nome pro HTML ficar bonito
                         eventos_html += f"<div style='color:{cor_txt}; font-size:12px; font-weight:bold; margin-top:2px;'>■ {ev_nome}</div>"
                     
                     html_cal += f"<td style='border: 1px solid #ddd; background-color:{bg_color}; padding:10px; vertical-align:top; min-height:80px; width:14%;'>"
