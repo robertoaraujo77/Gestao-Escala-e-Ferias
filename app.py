@@ -207,13 +207,11 @@ if menu == "📊 Dashboard Interativo":
             with c_res1:
                 st.dataframe(df_resumo, use_container_width=True)
             with c_res2:
-                # Gerador de Excel formatado para Resumo Anual
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_resumo.to_excel(writer, index=False, sheet_name=f'Férias_{ano_selecionado}')
                     worksheet = writer.sheets[f'Férias_{ano_selecionado}']
                     
-                    # Formatação de Cabeçalho e Colunas
                     header_fill = PatternFill(start_color="1F538D", end_color="1F538D", fill_type="solid")
                     header_font = Font(color="FFFFFF", bold=True)
                     for cell in worksheet[1]:
@@ -257,7 +255,7 @@ if menu == "📊 Dashboard Interativo":
             except: pass
             
         # ====================================================
-        # GERADOR DA MATRIZ DO EXCEL COM DESIGN (OPENPYXL)
+        # GERADOR DA MATRIZ DO EXCEL COM DESIGN (HEATMAP)
         # ====================================================
         cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 ORDER BY nome ASC")
         todos_colabs_export = [row[0] for row in cursor.fetchall()]
@@ -277,7 +275,9 @@ if menu == "📊 Dashboard Interativo":
 
         df_export = pd.DataFrame(matriz_dados)
         df_export.set_index("Colaborador", inplace=True)
-        siglas_export = {"Presencial": "P", "Férias (Efetivas)": "Fér (Ef)", "Férias (Oficial)": "Fér (Of)", "Folga BH": "Folga"}
+        
+        # NOVAS SIGLAS MINIMALISTAS
+        siglas_export = {"Presencial": "P", "Férias (Efetivas)": "FE", "Férias (Oficial)": "FO", "Folga BH": "BH"}
 
         for dia, eventos in eventos_mes.items():
             if dia > dias_no_mes: continue
@@ -291,7 +291,9 @@ if menu == "📊 Dashboard Interativo":
                     df_export.at[ev_nome_full, str(dia)] = siglas_export.get(ev_tipo, ev_tipo)
 
         df_export.reset_index(inplace=True)
-        leg_row = {"Colaborador": "LEGENDA: P = Presencial | Fér (Ef) = Férias Efetivas | Fér (Of) = Férias Oficial | Folga = Folga BH"}
+        
+        # LEGENDA ATUALIZADA
+        leg_row = {"Colaborador": "LEGENDA: P (Fundo Verde) = Presencial | FE (Fundo Laranja) = Férias Efetivas | FO (Fundo Roxo) = Férias Oficial | BH (Fundo Azul) = Folga Banco Horas"}
         for dia in range(1, dias_no_mes + 1): leg_row[str(dia)] = ""
         df_export.loc[len(df_export)] = leg_row
 
@@ -303,9 +305,17 @@ if menu == "📊 Dashboard Interativo":
             # --- FORMATAÇÃO VISUAL DO EXCEL ---
             worksheet = writer.sheets[sheet_name]
             
+            # Paleta de Cores e Estilos
             fill_fds = PatternFill(start_color="F0F2F6", end_color="F0F2F6", fill_type="solid")
             fill_header = PatternFill(start_color="1F538D", end_color="1F538D", fill_type="solid")
+            
+            fill_p = PatternFill(start_color="15803D", end_color="15803D", fill_type="solid")
+            fill_fe = PatternFill(start_color="C2410C", end_color="C2410C", fill_type="solid")
+            fill_fo = PatternFill(start_color="7E22CE", end_color="7E22CE", fill_type="solid")
+            fill_bh = PatternFill(start_color="1D4ED8", end_color="1D4ED8", fill_type="solid")
+            
             font_header = Font(color="FFFFFF", bold=True)
+            font_branca = Font(color="FFFFFF", bold=True)
             align_center = Alignment(horizontal="center", vertical="center")
             
             worksheet.column_dimensions['A'].width = 38
@@ -318,7 +328,7 @@ if menu == "📊 Dashboard Interativo":
             for col_idx in range(2, dias_no_mes + 2):
                 dia_num = col_idx - 1
                 col_letter = get_column_letter(col_idx)
-                worksheet.column_dimensions[col_letter].width = 9
+                worksheet.column_dimensions[col_letter].width = 6 # Deixei mais apertadinho para caber na tela
                 
                 dia_semana = calendar.weekday(ano_selecionado, mes_num, dia_num)
                 is_weekend = (dia_semana == 5 or dia_semana == 6)
@@ -330,12 +340,20 @@ if menu == "📊 Dashboard Interativo":
                     if is_weekend:
                         cell.fill = fill_fds
 
-                    # Cores Idênticas ao Dashboard
+                    # Pinta a célula inteira com a cor baseada na sigla
                     val = cell.value
-                    if val == "P": cell.font = Font(color="15803D", bold=True)
-                    elif val == "Fér (Ef)": cell.font = Font(color="C2410C", bold=True)
-                    elif val == "Fér (Of)": cell.font = Font(color="7E22CE", bold=True)
-                    elif val == "Folga": cell.font = Font(color="1D4ED8", bold=True)
+                    if val == "P":
+                        cell.fill = fill_p
+                        cell.font = font_branca
+                    elif val == "FE":
+                        cell.fill = fill_fe
+                        cell.font = font_branca
+                    elif val == "FO":
+                        cell.fill = fill_fo
+                        cell.font = font_branca
+                    elif val == "BH":
+                        cell.fill = fill_bh
+                        cell.font = font_branca
 
             # Destacar Linha de Feriados (Linha 2)
             for cell in worksheet[2]:
