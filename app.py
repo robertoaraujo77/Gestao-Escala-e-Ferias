@@ -36,6 +36,13 @@ try:
     conn = init_connection()
     conn.autocommit = True
     cursor = conn.cursor()
+    
+    # --- AUTO-ATUALIZAÇÃO DO BANCO DE DADOS ---
+    # Verifica se a coluna exibir_escala já existe, se não, cria automaticamente!
+    cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='colaboradores' AND column_name='exibir_escala';")
+    if not cursor.fetchone():
+        cursor.execute("ALTER TABLE colaboradores ADD COLUMN exibir_escala INTEGER DEFAULT 1;")
+    # ------------------------------------------
 except Exception as e:
     st.error(f"🚨 Erro de Conexão com o Supabase. Detalhe: {e}")
     st.stop()
@@ -181,7 +188,8 @@ if menu == "📊 Dashboard Interativo":
     
     st.markdown("---")
     
-    cursor.execute("SELECT c.nome, l.tipo, l.data_inicio, l.data_fim FROM lancamentos l JOIN colaboradores c ON l.colaborador_id = c.id WHERE c.ativo = 1")
+    # O FILTRO APLICADO AQUI: Só puxa para a grade quem tem exibir_escala = 1
+    cursor.execute("SELECT c.nome, l.tipo, l.data_inicio, l.data_fim FROM lancamentos l JOIN colaboradores c ON l.colaborador_id = c.id WHERE c.ativo = 1 AND c.exibir_escala = 1")
     todos_lancamentos = cursor.fetchall()
     
     cursor.execute("SELECT data_feriado, descricao FROM feriados")
@@ -257,7 +265,8 @@ if menu == "📊 Dashboard Interativo":
         # ====================================================
         # GERADOR DA MATRIZ DO EXCEL COM DESIGN PRO (HEATMAP)
         # ====================================================
-        cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 ORDER BY nome ASC")
+        # O FILTRO APLICADO AQUI TAMBÉM: Só pro Excel quem exibir_escala = 1
+        cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 AND exibir_escala = 1 ORDER BY nome ASC")
         todos_colabs_export = [row[0] for row in cursor.fetchall()]
         dias_no_mes = calendar.monthrange(ano_selecionado, mes_num)[1]
         
@@ -279,7 +288,6 @@ if menu == "📊 Dashboard Interativo":
         df_export = pd.DataFrame(matriz_dados)
         df_export.set_index("Colaborador", inplace=True)
         
-        # Siglas curtas
         siglas_export = {"Presencial": "P", "Férias (Efetivas)": "FE", "Férias (Oficial)": "FO", "Folga BH": "BH"}
 
         for dia, eventos in eventos_mes.items():
@@ -303,10 +311,8 @@ if menu == "📊 Dashboard Interativo":
             # --- FORMATAÇÃO VISUAL DO EXCEL ---
             worksheet = writer.sheets[sheet_name]
             
-            # Congela a Coluna de Nomes e as Linhas de Data/Semana
             worksheet.freeze_panes = 'B3'
             
-            # Estilos de Borda
             thin_border = Border(
                 left=Side(style='thin', color='D4D4D4'),
                 right=Side(style='thin', color='D4D4D4'),
@@ -314,7 +320,6 @@ if menu == "📊 Dashboard Interativo":
                 bottom=Side(style='thin', color='D4D4D4')
             )
             
-            # Paleta de Cores
             fill_fds = PatternFill(start_color="F0F2F6", end_color="F0F2F6", fill_type="solid")
             fill_header = PatternFill(start_color="1F538D", end_color="1F538D", fill_type="solid")
             fill_semana = PatternFill(start_color="E6F2FF", end_color="E6F2FF", fill_type="solid")
@@ -325,7 +330,6 @@ if menu == "📊 Dashboard Interativo":
             fill_fo = PatternFill(start_color="7E22CE", end_color="7E22CE", fill_type="solid")
             fill_bh = PatternFill(start_color="1D4ED8", end_color="1D4ED8", fill_type="solid")
             
-            # Fontes
             font_header = Font(color="FFFFFF", bold=True)
             font_semana = Font(color="005CE6", bold=True, size=9)
             font_feriado = Font(color="B45309", bold=True, size=9)
@@ -334,7 +338,6 @@ if menu == "📊 Dashboard Interativo":
             
             worksheet.column_dimensions['A'].width = 36
             
-            # Aplicar bordas e altura geral
             for row_idx in range(1, worksheet.max_row + 1):
                 worksheet.row_dimensions[row_idx].height = 20
                 for col_idx in range(1, dias_no_mes + 2):
@@ -342,12 +345,10 @@ if menu == "📊 Dashboard Interativo":
                     cell.border = thin_border
                     if col_idx > 1: cell.alignment = align_center
             
-            # 1. Cabeçalho de Números (Linha 1)
             for cell in worksheet[1]:
                 cell.fill = fill_header
                 cell.font = font_header
 
-            # 2. Cabeçalho de Dias da Semana (Linha 2)
             worksheet.cell(row=2, column=1).alignment = Alignment(horizontal="right", vertical="center")
             worksheet.cell(row=2, column=1).font = font_semana
             
@@ -364,7 +365,6 @@ if menu == "📊 Dashboard Interativo":
                     cell_semana.fill = fill_semana
                     cell_semana.font = font_semana
 
-            # 3. Dados dos Colaboradores e Pintura de Feriados/FDS
             for col_idx in range(2, dias_no_mes + 2):
                 dia_num = col_idx - 1
                 col_letter = get_column_letter(col_idx)
@@ -378,13 +378,11 @@ if menu == "📊 Dashboard Interativo":
                 for row_idx in range(3, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row_idx, column=col_idx)
                     
-                    # Fundo Padrão da Coluna (Feriado ou Fim de Semana)
                     if is_feriado:
                         cell.fill = fill_feriado
                     elif is_weekend:
                         cell.fill = fill_fds
 
-                    # Sobrescreve com a cor do lançamento se houver marcação
                     val = cell.value
                     if val == "P":
                         cell.fill = fill_p
@@ -399,7 +397,6 @@ if menu == "📊 Dashboard Interativo":
                         cell.fill = fill_bh
                         cell.font = font_branca
                     
-            # 4. LEGENDA DE CORES (Bloco Visual Colorido)
             start_leg = worksheet.max_row + 2
             worksheet.cell(row=start_leg, column=1, value="LEGENDA DE CORES:").font = Font(bold=True, color="555555")
             
@@ -416,12 +413,10 @@ if menu == "📊 Dashboard Interativo":
                 row_leg = start_leg + 1 + i
                 worksheet.row_dimensions[row_leg].height = 20
                 
-                # Nome da Legenda (Coluna A)
                 c_text = worksheet.cell(row=row_leg, column=1, value=texto)
                 c_text.alignment = Alignment(horizontal="right", vertical="center")
                 c_text.font = Font(italic=True, color="555555")
                 
-                # Caixinha Colorida (Coluna B)
                 c_box = worksheet.cell(row=row_leg, column=2, value=sigla)
                 c_box.fill = fill
                 c_box.border = thin_border
@@ -505,10 +500,15 @@ elif menu == "👥 Gestão de Equipe":
                 d_pendentes = st.number_input("Dias Pendentes (Saldo Inicial)", value=0, step=1)
                 bh_inicial = st.number_input("Saldo Banco de Horas Inicial", value=0.0, step=0.5)
                 
+                # NOVO: Checkbox no Cadastro
+                st.markdown("<br>", unsafe_allow_html=True)
+                exibir_escala = st.checkbox("👁️ Exibir Colaborador na Grade/Dashboard?", value=True)
+                val_exibir = 1 if exibir_escala else 0
+                
                 if st.form_submit_button("💾 Salvar Colaborador", use_container_width=True):
                     try:
-                        cursor.execute("INSERT INTO colaboradores (nome, funcao, area, admissao, venc_ferias, dias_pendentes, saldo_bh) VALUES (%s, %s, %s, %s, %s, %s, %s)", 
-                                       (nome, funcao, area, admissao.strftime("%d/%m/%Y"), data_limite.strftime("%d/%m/%Y"), d_pendentes, bh_inicial))
+                        cursor.execute("INSERT INTO colaboradores (nome, funcao, area, admissao, venc_ferias, dias_pendentes, saldo_bh, exibir_escala) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", 
+                                       (nome, funcao, area, admissao.strftime("%d/%m/%Y"), data_limite.strftime("%d/%m/%Y"), d_pendentes, bh_inicial, val_exibir))
                         st.success("Colaborador cadastrado!")
                         st.rerun()
                     except Exception as e:
@@ -517,9 +517,13 @@ elif menu == "👥 Gestão de Equipe":
             idx = lista_nomes.index(escolha) - 1
             colab_id = colaboradores[idx][0]
             
-            cursor.execute("SELECT nome, funcao, area, admissao, venc_ferias, ativo FROM colaboradores WHERE id=%s", (colab_id,))
+            # Buscando também o campo exibir_escala
+            cursor.execute("SELECT nome, funcao, area, admissao, venc_ferias, ativo, exibir_escala FROM colaboradores WHERE id=%s", (colab_id,))
             dados = cursor.fetchone()
             d_atual, b_atual, d_db, b_db, f_efe, f_ofic, f_bh = get_saldos(colab_id)
+            
+            # Trata se o banco antigo retornar Null
+            exibir_bd = dados[6] if dados[6] is not None else 1
             
             # --- HEADER BONITO ---
             c_h1, c_h2, c_h3 = st.columns([2, 1, 1])
@@ -560,6 +564,11 @@ elif menu == "👥 Gestão de Equipe":
                 d_pendentes = st.number_input("Dias Pendentes (Mês Atual)", value=int(d_atual), step=1)
                 bh_atual_input = st.number_input("Saldo Banco de Horas (Mês Atual)", value=float(b_atual), step=0.5)
                 
+                # NOVO: Checkbox na Edição
+                st.markdown("<br>", unsafe_allow_html=True)
+                exibir_escala = st.checkbox("👁️ Exibir Colaborador na Grade/Dashboard?", value=bool(exibir_bd))
+                val_exibir = 1 if exibir_escala else 0
+                
                 st.markdown("<br>", unsafe_allow_html=True)
                 col_btn1, col_btn2, col_btn3 = st.columns(3)
                 
@@ -574,8 +583,8 @@ elif menu == "👥 Gestão de Equipe":
                 if submit:
                     novo_d_db = d_pendentes - f_efe + f_ofic
                     novo_b_db = bh_atual_input - f_bh
-                    cursor.execute("UPDATE colaboradores SET nome=%s, funcao=%s, area=%s, admissao=%s, venc_ferias=%s, dias_pendentes=%s, saldo_bh=%s WHERE id=%s", 
-                                   (nome, funcao, area, admissao.strftime("%d/%m/%Y"), data_limite.strftime("%d/%m/%Y"), novo_d_db, novo_b_db, colab_id))
+                    cursor.execute("UPDATE colaboradores SET nome=%s, funcao=%s, area=%s, admissao=%s, venc_ferias=%s, dias_pendentes=%s, saldo_bh=%s, exibir_escala=%s WHERE id=%s", 
+                                   (nome, funcao, area, admissao.strftime("%d/%m/%Y"), data_limite.strftime("%d/%m/%Y"), novo_d_db, novo_b_db, val_exibir, colab_id))
                     st.success("Atualizado!")
                     st.rerun()
                 
