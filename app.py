@@ -183,7 +183,7 @@ if menu == "📊 Dashboard Interativo":
     col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
     mostrar_presencial = col_f1.checkbox("🟩 Presencial", value=True)
     mostrar_efetivas = col_f2.checkbox("🟧 Férias Efetivas", value=True)
-    mostrar_oficial = col_f3.checkbox("🟪 Férias Oficial", value=True)
+    mostrar_oficial = col_f3.checkbox("🟪 Férias Oficial", value=False)
     mostrar_folga_bh = col_f4.checkbox("🟦 Folga BH", value=True)
     mostrar_feriados = col_f5.checkbox("🟫 Feriados", value=True)
     
