@@ -38,7 +38,6 @@ try:
     cursor = conn.cursor()
     
     # --- AUTO-ATUALIZAÇÃO DO BANCO DE DADOS ---
-    # Verifica se a coluna exibir_escala já existe, se não, cria automaticamente!
     cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='colaboradores' AND column_name='exibir_escala';")
     if not cursor.fetchone():
         cursor.execute("ALTER TABLE colaboradores ADD COLUMN exibir_escala INTEGER DEFAULT 1;")
@@ -126,7 +125,7 @@ if menu == "📊 Dashboard Interativo":
     st.header("Dashboard da Equipe")
     
     # ----------------------------------------------------
-    # SISTEMA DE ALERTA DP (LÓGICA INTELIGENTE CLT)
+    # SISTEMA DE ALERTA DP
     # ----------------------------------------------------
     cursor.execute("SELECT id, nome, venc_ferias FROM colaboradores WHERE ativo = 1")
     alertas_aviso = []
@@ -166,8 +165,10 @@ if menu == "📊 Dashboard Interativo":
             for a in alertas_aviso:
                 st.warning(a)
         st.markdown("<br>", unsafe_allow_html=True)
-    # ----------------------------------------------------
 
+    # ----------------------------------------------------
+    # FILTROS PRINCIPAIS
+    # ----------------------------------------------------
     col1, col2 = st.columns([1, 3])
     ano_atual = datetime.now().year
     mes_atual = datetime.now().month
@@ -178,7 +179,7 @@ if menu == "📊 Dashboard Interativo":
         meses = ["Resumo Anual", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         mes_selecionado = st.selectbox("Mês / Visão", meses, index=mes_atual)
     
-    st.markdown("**Filtros (Legenda):**")
+    st.markdown("**Filtros de Presença:**")
     col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
     mostrar_presencial = col_f1.checkbox("🟩 Presencial", value=True)
     mostrar_efetivas = col_f2.checkbox("🟧 Férias Efetivas", value=True)
@@ -188,13 +189,18 @@ if menu == "📊 Dashboard Interativo":
     
     st.markdown("---")
     
-    # O FILTRO APLICADO AQUI: Só puxa para a grade quem tem exibir_escala = 1
+    # ----------------------------------------------------
+    # BUSCA DE DADOS E FERIADOS
+    # ----------------------------------------------------
     cursor.execute("SELECT c.nome, l.tipo, l.data_inicio, l.data_fim FROM lancamentos l JOIN colaboradores c ON l.colaborador_id = c.id WHERE c.ativo = 1 AND c.exibir_escala = 1")
     todos_lancamentos = cursor.fetchall()
     
     cursor.execute("SELECT data_feriado, descricao FROM feriados")
     feriados = {linha[0]: linha[1] for linha in cursor.fetchall()}
 
+    # ----------------------------------------------------
+    # RENDERIZAÇÃO DA VISÃO "RESUMO ANUAL"
+    # ----------------------------------------------------
     if mes_selecionado == "Resumo Anual":
         st.subheader(f"Resumo de Férias do Ano - {ano_selecionado}")
         dados_resumo = []
@@ -246,11 +252,15 @@ if menu == "📊 Dashboard Interativo":
         else:
             st.info("Nenhuma férias programada para este ano.")
 
+    # ----------------------------------------------------
+    # RENDERIZAÇÃO DA VISÃO "MENSAL" (Calendário ou Matriz)
+    # ----------------------------------------------------
     else:
         mes_num = meses.index(mes_selecionado)
         cal = calendar.monthcalendar(ano_selecionado, mes_num)
+        dias_no_mes = calendar.monthrange(ano_selecionado, mes_num)[1]
         
-        eventos_mes = {d: [] for d in range(1, 32)}
+        eventos_mes = {d: [] for d in range(1, dias_no_mes + 1)}
         for nome, tipo, d_ini_str, d_fim_str in todos_lancamentos:
             try:
                 dt_ini = datetime.strptime(d_ini_str, "%d/%m/%Y").date()
@@ -262,24 +272,17 @@ if menu == "📊 Dashboard Interativo":
                     atual += timedelta(days=1)
             except: pass
             
-        # ====================================================
-        # GERADOR DA MATRIZ DO EXCEL COM DESIGN PRO (HEATMAP)
-        # ====================================================
-        # O FILTRO APLICADO AQUI TAMBÉM: Só pro Excel quem exibir_escala = 1
         cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 AND exibir_escala = 1 ORDER BY nome ASC")
         todos_colabs_export = [row[0] for row in cursor.fetchall()]
-        dias_no_mes = calendar.monthrange(ano_selecionado, mes_num)[1]
         
+        # --- GERADOR DO EXCEL DE DOWNLOAD (EM BACKGROUND) ---
         matriz_dados = []
-        
-        # LINHA 1: Adicionando o Dia da Semana
         row_semana = {"Colaborador": "Dia da Semana ➔"}
         for dia in range(1, dias_no_mes + 1):
             wd = calendar.weekday(ano_selecionado, mes_num, dia)
             row_semana[str(dia)] = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][wd]
         matriz_dados.append(row_semana)
 
-        # LINHAS 2 EM DIANTE: Colaboradores
         for nome_colab in todos_colabs_export:
             row = {"Colaborador": nome_colab}
             for dia in range(1, dias_no_mes + 1): row[str(dia)] = ""
@@ -287,17 +290,14 @@ if menu == "📊 Dashboard Interativo":
 
         df_export = pd.DataFrame(matriz_dados)
         df_export.set_index("Colaborador", inplace=True)
-        
         siglas_export = {"Presencial": "P", "Férias (Efetivas)": "FE", "Férias (Oficial)": "FO", "Folga BH": "BH"}
 
         for dia, eventos in eventos_mes.items():
-            if dia > dias_no_mes: continue
             for ev_nome_full, ev_tipo in eventos:
                 if ev_tipo == "Presencial" and not mostrar_presencial: continue
                 if ev_tipo == "Férias (Efetivas)" and not mostrar_efetivas: continue
                 if ev_tipo == "Férias (Oficial)" and not mostrar_oficial: continue
                 if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
-                
                 if ev_nome_full in df_export.index:
                     df_export.at[ev_nome_full, str(dia)] = siglas_export.get(ev_tipo, ev_tipo)
 
@@ -307,19 +307,10 @@ if menu == "📊 Dashboard Interativo":
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             sheet_name = f'{mes_selecionado}_{ano_selecionado}'
             df_export.to_excel(writer, index=False, sheet_name=sheet_name)
-            
-            # --- FORMATAÇÃO VISUAL DO EXCEL ---
             worksheet = writer.sheets[sheet_name]
-            
             worksheet.freeze_panes = 'B3'
             
-            thin_border = Border(
-                left=Side(style='thin', color='D4D4D4'),
-                right=Side(style='thin', color='D4D4D4'),
-                top=Side(style='thin', color='D4D4D4'),
-                bottom=Side(style='thin', color='D4D4D4')
-            )
-            
+            thin_border = Border(left=Side(style='thin', color='D4D4D4'), right=Side(style='thin', color='D4D4D4'), top=Side(style='thin', color='D4D4D4'), bottom=Side(style='thin', color='D4D4D4'))
             fill_fds = PatternFill(start_color="F0F2F6", end_color="F0F2F6", fill_type="solid")
             fill_header = PatternFill(start_color="1F538D", end_color="1F538D", fill_type="solid")
             fill_semana = PatternFill(start_color="E6F2FF", end_color="E6F2FF", fill_type="solid")
@@ -356,7 +347,6 @@ if menu == "📊 Dashboard Interativo":
                 dia_num = col_idx - 1
                 data_str = f"{dia_num:02d}/{mes_num:02d}/{ano_selecionado}"
                 is_feriado = data_str in feriados
-                
                 cell_semana = worksheet.cell(row=2, column=col_idx)
                 if is_feriado:
                     cell_semana.fill = fill_feriado
@@ -377,100 +367,163 @@ if menu == "📊 Dashboard Interativo":
                 
                 for row_idx in range(3, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row_idx, column=col_idx)
-                    
-                    if is_feriado:
-                        cell.fill = fill_feriado
-                    elif is_weekend:
-                        cell.fill = fill_fds
+                    if is_feriado: cell.fill = fill_feriado
+                    elif is_weekend: cell.fill = fill_fds
 
                     val = cell.value
-                    if val == "P":
-                        cell.fill = fill_p
-                        cell.font = font_branca
-                    elif val == "FE":
-                        cell.fill = fill_fe
-                        cell.font = font_branca
-                    elif val == "FO":
-                        cell.fill = fill_fo
-                        cell.font = font_branca
-                    elif val == "BH":
-                        cell.fill = fill_bh
-                        cell.font = font_branca
+                    if val == "P": cell.fill = fill_p; cell.font = font_branca
+                    elif val == "FE": cell.fill = fill_fe; cell.font = font_branca
+                    elif val == "FO": cell.fill = fill_fo; cell.font = font_branca
+                    elif val == "BH": cell.fill = fill_bh; cell.font = font_branca
                     
             start_leg = worksheet.max_row + 2
             worksheet.cell(row=start_leg, column=1, value="LEGENDA DE CORES:").font = Font(bold=True, color="555555")
-            
-            legendas = [
-                ("Presencial", "P", fill_p, font_branca),
-                ("Férias Efetivas", "FE", fill_fe, font_branca),
-                ("Férias Oficial", "FO", fill_fo, font_branca),
-                ("Folga Banco de Horas", "BH", fill_bh, font_branca),
-                ("Feriado Nacional", "", fill_feriado, None),
-                ("Fim de Semana", "", fill_fds, None)
-            ]
-            
+            legendas = [("Presencial", "P", fill_p, font_branca), ("Férias Efetivas", "FE", fill_fe, font_branca), ("Férias Oficial", "FO", fill_fo, font_branca), ("Folga Banco de Horas", "BH", fill_bh, font_branca), ("Feriado Nacional", "", fill_feriado, None), ("Fim de Semana", "", fill_fds, None)]
             for i, (texto, sigla, fill, font) in enumerate(legendas):
                 row_leg = start_leg + 1 + i
                 worksheet.row_dimensions[row_leg].height = 20
-                
                 c_text = worksheet.cell(row=row_leg, column=1, value=texto)
                 c_text.alignment = Alignment(horizontal="right", vertical="center")
                 c_text.font = Font(italic=True, color="555555")
-                
                 c_box = worksheet.cell(row=row_leg, column=2, value=sigla)
                 c_box.fill = fill
                 c_box.border = thin_border
                 c_box.alignment = align_center
                 if font: c_box.font = font
-        # ====================================================
 
-        c_cal1, c_cal2 = st.columns([5, 1])
-        c_cal1.markdown(f"### Grade de {mes_selecionado}")
-        c_cal2.download_button(
-            label="📥 Exportar Matriz (Excel)",
-            data=output.getvalue(),
-            file_name=f'Escala_Matriz_{mes_selecionado}_{ano_selecionado}.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            use_container_width=True
-        )
+        # --- SELETOR DE VISUALIZAÇÃO DA WEB E EXPORTAÇÃO ---
+        c_view1, c_view2 = st.columns([3, 1])
+        with c_view1:
+            visao_web = st.radio("Formato de Exibição Web:", ["📊 Matriz de Escala (Heatmap)", "🗓️ Calendário Clássico"], horizontal=True)
+        with c_view2:
+            st.download_button(
+                label="📥 Exportar Matriz (Excel)",
+                data=output.getvalue(),
+                file_name=f'Escala_Matriz_{mes_selecionado}_{ano_selecionado}.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                use_container_width=True
+            )
+
+        st.markdown("<br>", unsafe_allow_html=True)
 
         cores = {"Presencial": "#15803d", "Férias (Efetivas)": "#c2410c", "Férias (Oficial)": "#7e22ce", "Folga BH": "#1d4ed8"}
-        
-        html_cal = "<table style='width:100%; border-collapse: collapse; text-align:center; font-family:sans-serif;'>"
-        html_cal += "<tr style='background-color:#1f538d; color:white;'><th>Dom</th><th>Seg</th><th>Ter</th><th>Qua</th><th>Qui</th><th>Sex</th><th>Sáb</th></tr>"
-        
-        for semana in cal:
-            html_cal += "<tr>"
-            for col, dia in enumerate(semana):
-                if dia == 0:
-                    html_cal += "<td style='border: 1px solid #ddd; background-color:#f0f2f6; padding:10px;'></td>"
-                else:
-                    data_str = f"{dia:02d}/{mes_num:02d}/{ano_selecionado}"
-                    bg_color = "#ffffff" if (col != 0 and col != 6) else "#f9f9f9"
-                    
-                    eventos_html = ""
-                    if data_str in feriados and mostrar_feriados:
-                        bg_color = "#fff0cc"
-                        eventos_html += f"<div style='color:#b45309; font-size:12px; font-weight:bold; margin-bottom:2px;'>★ {feriados[data_str]}</div>"
-                    
-                    for ev_nome_full, ev_tipo in eventos_mes[dia]:
-                        if ev_tipo == "Presencial" and not mostrar_presencial: continue
-                        if ev_tipo == "Férias (Efetivas)" and not mostrar_efetivas: continue
-                        if ev_tipo == "Férias (Oficial)" and not mostrar_oficial: continue
-                        if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
 
-                        cor_txt = cores.get(ev_tipo, "#000")
-                        ev_nome = ev_nome_full.split()[0]
-                        eventos_html += f"<div style='color:{cor_txt}; font-size:12px; font-weight:bold; margin-top:2px;'>■ {ev_nome}</div>"
+        # --- OPÇÃO 1: MATRIZ NA WEB ---
+        if visao_web == "📊 Matriz de Escala (Heatmap)":
+            html_matrix = "<div style='overflow-x: auto;'>"
+            html_matrix += "<table style='width:100%; border-collapse: collapse; text-align:center; font-family:sans-serif; font-size: 13px; white-space: nowrap;'>"
+            
+            # CABEÇALHO (DIAS)
+            html_matrix += "<tr>"
+            html_matrix += "<th style='position: sticky; left: 0; background-color: #1f538d; color: white; padding: 8px; text-align: left; z-index: 2; min-width: 200px; border: 1px solid #ddd;'>Colaborador</th>"
+            for dia in range(1, dias_no_mes + 1):
+                html_matrix += f"<th style='background-color:#1f538d; color:white; padding: 8px; border: 1px solid #ddd; min-width: 35px;'>{dia}</th>"
+            html_matrix += "</tr>"
+            
+            # DIA DA SEMANA
+            html_matrix += "<tr style='background-color:#E6F2FF; color:#005CE6; font-size: 11px;'>"
+            html_matrix += "<td style='position: sticky; left: 0; background-color: #E6F2FF; padding: 4px; text-align: right; font-weight: bold; border: 1px solid #ddd; z-index: 1;'>Dia da Semana ➔</td>"
+            for dia in range(1, dias_no_mes + 1):
+                wd = calendar.weekday(ano_selecionado, mes_num, dia)
+                sigla_dia = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][wd]
+                
+                data_str = f"{dia:02d}/{mes_num:02d}/{ano_selecionado}"
+                if data_str in feriados and mostrar_feriados:
+                    html_matrix += f"<td style='background-color:#FFF0CC; color:#B45309; padding: 4px; border: 1px solid #ddd; font-weight: bold;'>{sigla_dia}</td>"
+                else:
+                    html_matrix += f"<td style='padding: 4px; border: 1px solid #ddd; font-weight: bold;'>{sigla_dia}</td>"
+            html_matrix += "</tr>"
+
+            # COLABORADORES
+            for nome_colab in todos_colabs_export:
+                html_matrix += "<tr>"
+                html_matrix += f"<td style='position: sticky; left: 0; background-color: white; padding: 8px; text-align: left; font-weight: bold; border: 1px solid #ddd; z-index: 1; color: #333;'>{nome_colab}</td>"
+                
+                for dia in range(1, dias_no_mes + 1):
+                    data_str = f"{dia:02d}/{mes_num:02d}/{ano_selecionado}"
+                    dia_semana = calendar.weekday(ano_selecionado, mes_num, dia)
+                    is_weekend = (dia_semana == 5 or dia_semana == 6)
+                    is_feriado = data_str in feriados
                     
-                    html_cal += f"<td style='border: 1px solid #ddd; background-color:{bg_color}; padding:10px; vertical-align:top; min-height:80px; width:14%;'>"
-                    html_cal += f"<div style='font-size:16px; font-weight:bold; color:#555; text-align:right;'>{dia}</div>"
-                    html_cal += eventos_html
-                    html_cal += "</td>"
-            html_cal += "</tr>"
-        html_cal += "</table>"
-        
-        st.markdown(html_cal, unsafe_allow_html=True)
+                    bg_color = "#ffffff"
+                    if is_feriado and mostrar_feriados: bg_color = "#FFF0CC"
+                    elif is_weekend: bg_color = "#f0f2f6"
+                    
+                    txt_sigla = ""
+                    txt_color = ""
+                    
+                    # Procura o evento deste colaborador neste dia
+                    for ev_nome_full, ev_tipo in eventos_mes[dia]:
+                        if ev_nome_full == nome_colab:
+                            if ev_tipo == "Presencial" and not mostrar_presencial: continue
+                            if ev_tipo == "Férias (Efetivas)" and not mostrar_efetivas: continue
+                            if ev_tipo == "Férias (Oficial)" and not mostrar_oficial: continue
+                            if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
+                            
+                            bg_color = cores.get(ev_tipo, bg_color)
+                            txt_color = "white"
+                            txt_sigla = siglas_export.get(ev_tipo, "")
+                            break
+                    
+                    if txt_sigla:
+                        html_matrix += f"<td style='background-color:{bg_color}; color:{txt_color}; padding: 8px; border: 1px solid #ddd; font-weight: bold;'>{txt_sigla}</td>"
+                    else:
+                        html_matrix += f"<td style='background-color:{bg_color}; padding: 8px; border: 1px solid #ddd;'></td>"
+                        
+                html_matrix += "</tr>"
+            
+            html_matrix += "</table></div>"
+            st.markdown(html_matrix, unsafe_allow_html=True)
+
+            # Legenda Minimalista abaixo da Tabela Web
+            st.markdown("""
+            <div style='margin-top: 15px; font-size: 13px; color: #555;'>
+                <b>Legenda:</b> 
+                <span style='background-color: #15803D; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px;'>P</span> Presencial 
+                <span style='background-color: #C2410C; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 10px;'>FE</span> Férias Efetivas 
+                <span style='background-color: #7E22CE; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 10px;'>FO</span> Férias Oficial 
+                <span style='background-color: #1D4ED8; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 10px;'>BH</span> Folga BH
+                <span style='background-color: #FFF0CC; color: #B45309; padding: 2px 6px; border-radius: 4px; margin-left: 10px; border: 1px solid #DDD;'>Dia</span> Feriado
+                <span style='background-color: #f0f2f6; color: #005CE6; padding: 2px 6px; border-radius: 4px; margin-left: 10px; border: 1px solid #DDD;'>Dia</span> Fim de Semana
+            </div>
+            """, unsafe_allow_html=True)
+
+        # --- OPÇÃO 2: CALENDÁRIO CLÁSSICO ---
+        else:
+            html_cal = "<table style='width:100%; border-collapse: collapse; text-align:center; font-family:sans-serif;'>"
+            html_cal += "<tr style='background-color:#1f538d; color:white;'><th>Dom</th><th>Seg</th><th>Ter</th><th>Qua</th><th>Qui</th><th>Sex</th><th>Sáb</th></tr>"
+            
+            for semana in cal:
+                html_cal += "<tr>"
+                for col, dia in enumerate(semana):
+                    if dia == 0:
+                        html_cal += "<td style='border: 1px solid #ddd; background-color:#f0f2f6; padding:10px;'></td>"
+                    else:
+                        data_str = f"{dia:02d}/{mes_num:02d}/{ano_selecionado}"
+                        bg_color = "#ffffff" if (col != 0 and col != 6) else "#f9f9f9"
+                        
+                        eventos_html = ""
+                        if data_str in feriados and mostrar_feriados:
+                            bg_color = "#fff0cc"
+                            eventos_html += f"<div style='color:#b45309; font-size:12px; font-weight:bold; margin-bottom:2px;'>★ {feriados[data_str]}</div>"
+                        
+                        for ev_nome_full, ev_tipo in eventos_mes[dia]:
+                            if ev_tipo == "Presencial" and not mostrar_presencial: continue
+                            if ev_tipo == "Férias (Efetivas)" and not mostrar_efetivas: continue
+                            if ev_tipo == "Férias (Oficial)" and not mostrar_oficial: continue
+                            if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
+
+                            cor_txt = cores.get(ev_tipo, "#000")
+                            ev_nome = ev_nome_full.split()[0]
+                            eventos_html += f"<div style='color:{cor_txt}; font-size:12px; font-weight:bold; margin-top:2px;'>■ {ev_nome}</div>"
+                        
+                        html_cal += f"<td style='border: 1px solid #ddd; background-color:{bg_color}; padding:10px; vertical-align:top; min-height:80px; width:14%;'>"
+                        html_cal += f"<div style='font-size:16px; font-weight:bold; color:#555; text-align:right;'>{dia}</div>"
+                        html_cal += eventos_html
+                        html_cal += "</td>"
+                html_cal += "</tr>"
+            html_cal += "</table>"
+            st.markdown(html_cal, unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 2: GESTÃO DE EQUIPE
@@ -500,7 +553,6 @@ elif menu == "👥 Gestão de Equipe":
                 d_pendentes = st.number_input("Dias Pendentes (Saldo Inicial)", value=0, step=1)
                 bh_inicial = st.number_input("Saldo Banco de Horas Inicial", value=0.0, step=0.5)
                 
-                # NOVO: Checkbox no Cadastro
                 st.markdown("<br>", unsafe_allow_html=True)
                 exibir_escala = st.checkbox("👁️ Exibir Colaborador na Grade/Dashboard?", value=True)
                 val_exibir = 1 if exibir_escala else 0
@@ -517,15 +569,12 @@ elif menu == "👥 Gestão de Equipe":
             idx = lista_nomes.index(escolha) - 1
             colab_id = colaboradores[idx][0]
             
-            # Buscando também o campo exibir_escala
             cursor.execute("SELECT nome, funcao, area, admissao, venc_ferias, ativo, exibir_escala FROM colaboradores WHERE id=%s", (colab_id,))
             dados = cursor.fetchone()
             d_atual, b_atual, d_db, b_db, f_efe, f_ofic, f_bh = get_saldos(colab_id)
             
-            # Trata se o banco antigo retornar Null
             exibir_bd = dados[6] if dados[6] is not None else 1
             
-            # --- HEADER BONITO ---
             c_h1, c_h2, c_h3 = st.columns([2, 1, 1])
             c_h1.subheader(dados[0])
             c_h2.markdown(f"<div style='background-color:#fff2e6; color:#cc6600; padding:10px; border-radius:5px; text-align:center; font-weight:bold; border: 1px solid #ffcc99;'>✈ Dias Pendentes: {d_atual}</div>", unsafe_allow_html=True)
@@ -564,7 +613,6 @@ elif menu == "👥 Gestão de Equipe":
                 d_pendentes = st.number_input("Dias Pendentes (Mês Atual)", value=int(d_atual), step=1)
                 bh_atual_input = st.number_input("Saldo Banco de Horas (Mês Atual)", value=float(b_atual), step=0.5)
                 
-                # NOVO: Checkbox na Edição
                 st.markdown("<br>", unsafe_allow_html=True)
                 exibir_escala = st.checkbox("👁️ Exibir Colaborador na Grade/Dashboard?", value=bool(exibir_bd))
                 val_exibir = 1 if exibir_escala else 0
