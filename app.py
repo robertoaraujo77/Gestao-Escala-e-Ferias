@@ -6,6 +6,8 @@ import requests
 import io
 from datetime import datetime, date, timedelta
 from calendar import monthrange
+from openpyxl.styles import Alignment, PatternFill, Font
+from openpyxl.utils import get_column_letter
 
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA WEB
@@ -205,10 +207,28 @@ if menu == "📊 Dashboard Interativo":
             with c_res1:
                 st.dataframe(df_resumo, use_container_width=True)
             with c_res2:
-                # Gerador de Excel para Resumo Anual
+                # Gerador de Excel formatado para Resumo Anual
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_resumo.to_excel(writer, index=False, sheet_name=f'Férias_{ano_selecionado}')
+                    worksheet = writer.sheets[f'Férias_{ano_selecionado}']
+                    
+                    # Formatação de Cabeçalho e Colunas
+                    header_fill = PatternFill(start_color="1F538D", end_color="1F538D", fill_type="solid")
+                    header_font = Font(color="FFFFFF", bold=True)
+                    for cell in worksheet[1]:
+                        cell.fill = header_fill
+                        cell.font = header_font
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                    
+                    for col in worksheet.columns:
+                        max_length = 0
+                        column = col[0].column_letter
+                        for cell in col:
+                            try:
+                                if len(str(cell.value)) > max_length: max_length = len(cell.value)
+                            except: pass
+                        worksheet.column_dimensions[column].width = max_length + 2
                 
                 st.download_button(
                     label="📥 Exportar Excel",
@@ -232,12 +252,12 @@ if menu == "📊 Dashboard Interativo":
                 atual = dt_ini
                 while atual <= dt_fim:
                     if atual.month == mes_num and atual.year == ano_selecionado:
-                        eventos_mes[atual.day].append((nome, tipo)) # Alterado para manter o nome completo para o Excel
+                        eventos_mes[atual.day].append((nome, tipo))
                     atual += timedelta(days=1)
             except: pass
             
         # ====================================================
-        # GERADOR DA MATRIZ DO EXCEL
+        # GERADOR DA MATRIZ DO EXCEL COM DESIGN (OPENPYXL)
         # ====================================================
         cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 ORDER BY nome ASC")
         todos_colabs_export = [row[0] for row in cursor.fetchall()]
@@ -277,10 +297,59 @@ if menu == "📊 Dashboard Interativo":
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_export.to_excel(writer, index=False, sheet_name=f'{mes_selecionado}_{ano_selecionado}')
+            sheet_name = f'{mes_selecionado}_{ano_selecionado}'
+            df_export.to_excel(writer, index=False, sheet_name=sheet_name)
+            
+            # --- FORMATAÇÃO VISUAL DO EXCEL ---
+            worksheet = writer.sheets[sheet_name]
+            
+            fill_fds = PatternFill(start_color="F0F2F6", end_color="F0F2F6", fill_type="solid")
+            fill_header = PatternFill(start_color="1F538D", end_color="1F538D", fill_type="solid")
+            font_header = Font(color="FFFFFF", bold=True)
+            align_center = Alignment(horizontal="center", vertical="center")
+            
+            worksheet.column_dimensions['A'].width = 38
+            
+            for cell in worksheet[1]:
+                cell.fill = fill_header
+                cell.font = font_header
+                cell.alignment = align_center
+
+            for col_idx in range(2, dias_no_mes + 2):
+                dia_num = col_idx - 1
+                col_letter = get_column_letter(col_idx)
+                worksheet.column_dimensions[col_letter].width = 9
+                
+                dia_semana = calendar.weekday(ano_selecionado, mes_num, dia_num)
+                is_weekend = (dia_semana == 5 or dia_semana == 6)
+                
+                for row_idx in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row_idx, column=col_idx)
+                    cell.alignment = align_center
+                    
+                    if is_weekend:
+                        cell.fill = fill_fds
+
+                    # Cores Idênticas ao Dashboard
+                    val = cell.value
+                    if val == "P": cell.font = Font(color="15803D", bold=True)
+                    elif val == "Fér (Ef)": cell.font = Font(color="C2410C", bold=True)
+                    elif val == "Fér (Of)": cell.font = Font(color="7E22CE", bold=True)
+                    elif val == "Folga": cell.font = Font(color="1D4ED8", bold=True)
+
+            # Destacar Linha de Feriados (Linha 2)
+            for cell in worksheet[2]:
+                if cell.column > 1 and cell.value:
+                    cell.fill = PatternFill(start_color="FFF0CC", end_color="FFF0CC", fill_type="solid")
+                    cell.font = Font(color="B45309", bold=True)
+                    
+            # Mesclar a última linha (Legenda)
+            last_row = worksheet.max_row
+            worksheet.merge_cells(start_row=last_row, start_column=1, end_row=last_row, end_column=dias_no_mes+1)
+            worksheet.cell(row=last_row, column=1).alignment = Alignment(horizontal="left", vertical="center")
+            worksheet.cell(row=last_row, column=1).font = Font(italic=True, color="555555")
         # ====================================================
 
-        # Cabeçalho da grade visual
         c_cal1, c_cal2 = st.columns([5, 1])
         c_cal1.markdown(f"### Grade de {mes_selecionado}")
         c_cal2.download_button(
@@ -317,7 +386,7 @@ if menu == "📊 Dashboard Interativo":
                         if ev_tipo == "Folga BH" and not mostrar_folga_bh: continue
 
                         cor_txt = cores.get(ev_tipo, "#000")
-                        ev_nome = ev_nome_full.split()[0] # Pega só o primeiro nome pro HTML ficar bonito
+                        ev_nome = ev_nome_full.split()[0]
                         eventos_html += f"<div style='color:{cor_txt}; font-size:12px; font-weight:bold; margin-top:2px;'>■ {ev_nome}</div>"
                     
                     html_cal += f"<td style='border: 1px solid #ddd; background-color:{bg_color}; padding:10px; vertical-align:top; min-height:80px; width:14%;'>"
