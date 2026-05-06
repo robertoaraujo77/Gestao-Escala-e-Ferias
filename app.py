@@ -255,7 +255,7 @@ if menu == "📊 Dashboard Interativo":
             except: pass
             
         # ====================================================
-        # GERADOR DA MATRIZ DO EXCEL COM DESIGN PRO E BORDAS
+        # GERADOR DA MATRIZ DO EXCEL COM DESIGN PRO (HEATMAP)
         # ====================================================
         cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 ORDER BY nome ASC")
         todos_colabs_export = [row[0] for row in cursor.fetchall()]
@@ -270,14 +270,7 @@ if menu == "📊 Dashboard Interativo":
             row_semana[str(dia)] = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][wd]
         matriz_dados.append(row_semana)
 
-        # LINHA 2: Feriados
-        row_feriados = {"Colaborador": "★ Feriados ★ ➔"}
-        for dia in range(1, dias_no_mes + 1):
-            data_str = f"{dia:02d}/{mes_num:02d}/{ano_selecionado}"
-            row_feriados[str(dia)] = feriados.get(data_str, "")
-        matriz_dados.append(row_feriados)
-
-        # LINHAS 3 EM DIANTE: Colaboradores
+        # LINHAS 2 EM DIANTE: Colaboradores
         for nome_colab in todos_colabs_export:
             row = {"Colaborador": nome_colab}
             for dia in range(1, dias_no_mes + 1): row[str(dia)] = ""
@@ -286,6 +279,7 @@ if menu == "📊 Dashboard Interativo":
         df_export = pd.DataFrame(matriz_dados)
         df_export.set_index("Colaborador", inplace=True)
         
+        # Siglas curtas
         siglas_export = {"Presencial": "P", "Férias (Efetivas)": "FE", "Férias (Oficial)": "FO", "Folga BH": "BH"}
 
         for dia, eventos in eventos_mes.items():
@@ -300,10 +294,6 @@ if menu == "📊 Dashboard Interativo":
                     df_export.at[ev_nome_full, str(dia)] = siglas_export.get(ev_tipo, ev_tipo)
 
         df_export.reset_index(inplace=True)
-        
-        leg_row = {"Colaborador": "LEGENDA: P (Fundo Verde) = Presencial | FE (Fundo Laranja) = Férias Efetivas | FO (Fundo Roxo) = Férias Oficial | BH (Fundo Azul) = Folga Banco Horas"}
-        for dia in range(1, dias_no_mes + 1): leg_row[str(dia)] = ""
-        df_export.loc[len(df_export)] = leg_row
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -313,8 +303,8 @@ if menu == "📊 Dashboard Interativo":
             # --- FORMATAÇÃO VISUAL DO EXCEL ---
             worksheet = writer.sheets[sheet_name]
             
-            # Congela as Colunas e Cabeçalhos!
-            worksheet.freeze_panes = 'B4'
+            # Congela a Coluna de Nomes e as Linhas de Data/Semana
+            worksheet.freeze_panes = 'B3'
             
             # Estilos de Borda
             thin_border = Border(
@@ -324,23 +314,27 @@ if menu == "📊 Dashboard Interativo":
                 bottom=Side(style='thin', color='D4D4D4')
             )
             
+            # Paleta de Cores
             fill_fds = PatternFill(start_color="F0F2F6", end_color="F0F2F6", fill_type="solid")
             fill_header = PatternFill(start_color="1F538D", end_color="1F538D", fill_type="solid")
             fill_semana = PatternFill(start_color="E6F2FF", end_color="E6F2FF", fill_type="solid")
+            fill_feriado = PatternFill(start_color="FFF0CC", end_color="FFF0CC", fill_type="solid")
             
             fill_p = PatternFill(start_color="15803D", end_color="15803D", fill_type="solid")
             fill_fe = PatternFill(start_color="C2410C", end_color="C2410C", fill_type="solid")
             fill_fo = PatternFill(start_color="7E22CE", end_color="7E22CE", fill_type="solid")
             fill_bh = PatternFill(start_color="1D4ED8", end_color="1D4ED8", fill_type="solid")
             
+            # Fontes
             font_header = Font(color="FFFFFF", bold=True)
             font_semana = Font(color="005CE6", bold=True, size=9)
+            font_feriado = Font(color="B45309", bold=True, size=9)
             font_branca = Font(color="FFFFFF", bold=True)
             align_center = Alignment(horizontal="center", vertical="center")
             
             worksheet.column_dimensions['A'].width = 36
             
-            # Aplicar bordas, altura e centralização geral
+            # Aplicar bordas e altura geral
             for row_idx in range(1, worksheet.max_row + 1):
                 worksheet.row_dimensions[row_idx].height = 20
                 for col_idx in range(1, dias_no_mes + 2):
@@ -348,41 +342,49 @@ if menu == "📊 Dashboard Interativo":
                     cell.border = thin_border
                     if col_idx > 1: cell.alignment = align_center
             
-            # 1. Cabeçalho de Números
+            # 1. Cabeçalho de Números (Linha 1)
             for cell in worksheet[1]:
                 cell.fill = fill_header
                 cell.font = font_header
-                cell.alignment = align_center
 
-            # 2. Cabeçalho de Dias da Semana
+            # 2. Cabeçalho de Dias da Semana (Linha 2)
             worksheet.cell(row=2, column=1).alignment = Alignment(horizontal="right", vertical="center")
             worksheet.cell(row=2, column=1).font = font_semana
-            for cell in worksheet[2]:
-                if cell.column > 1:
-                    cell.fill = fill_semana
-                    cell.font = font_semana
+            
+            for col_idx in range(2, dias_no_mes + 2):
+                dia_num = col_idx - 1
+                data_str = f"{dia_num:02d}/{mes_num:02d}/{ano_selecionado}"
+                is_feriado = data_str in feriados
+                
+                cell_semana = worksheet.cell(row=2, column=col_idx)
+                if is_feriado:
+                    cell_semana.fill = fill_feriado
+                    cell_semana.font = font_feriado
+                else:
+                    cell_semana.fill = fill_semana
+                    cell_semana.font = font_semana
 
-            # 3. Cabeçalho de Feriados
-            worksheet.cell(row=3, column=1).alignment = Alignment(horizontal="right", vertical="center")
-            for cell in worksheet[3]:
-                if cell.column > 1 and cell.value:
-                    cell.fill = PatternFill(start_color="FFF0CC", end_color="FFF0CC", fill_type="solid")
-                    cell.font = Font(color="B45309", bold=True, size=9)
-
-            # 4. Dados dos Colaboradores
+            # 3. Dados dos Colaboradores e Pintura de Feriados/FDS
             for col_idx in range(2, dias_no_mes + 2):
                 dia_num = col_idx - 1
                 col_letter = get_column_letter(col_idx)
                 worksheet.column_dimensions[col_letter].width = 6
                 
+                data_str = f"{dia_num:02d}/{mes_num:02d}/{ano_selecionado}"
+                is_feriado = data_str in feriados
                 dia_semana = calendar.weekday(ano_selecionado, mes_num, dia_num)
                 is_weekend = (dia_semana == 5 or dia_semana == 6)
                 
-                for row_idx in range(4, worksheet.max_row):
+                for row_idx in range(3, worksheet.max_row + 1):
                     cell = worksheet.cell(row=row_idx, column=col_idx)
                     
-                    if is_weekend: cell.fill = fill_fds
+                    # Fundo Padrão da Coluna (Feriado ou Fim de Semana)
+                    if is_feriado:
+                        cell.fill = fill_feriado
+                    elif is_weekend:
+                        cell.fill = fill_fds
 
+                    # Sobrescreve com a cor do lançamento se houver marcação
                     val = cell.value
                     if val == "P":
                         cell.fill = fill_p
@@ -397,12 +399,34 @@ if menu == "📊 Dashboard Interativo":
                         cell.fill = fill_bh
                         cell.font = font_branca
                     
-            # 5. Legenda (Última linha)
-            last_row = worksheet.max_row
-            worksheet.merge_cells(start_row=last_row, start_column=1, end_row=last_row, end_column=dias_no_mes+1)
-            leg_cell = worksheet.cell(row=last_row, column=1)
-            leg_cell.alignment = Alignment(horizontal="left", vertical="center")
-            leg_cell.font = Font(italic=True, color="555555")
+            # 4. LEGENDA DE CORES (Bloco Visual Colorido)
+            start_leg = worksheet.max_row + 2
+            worksheet.cell(row=start_leg, column=1, value="LEGENDA DE CORES:").font = Font(bold=True, color="555555")
+            
+            legendas = [
+                ("Presencial", "P", fill_p, font_branca),
+                ("Férias Efetivas", "FE", fill_fe, font_branca),
+                ("Férias Oficial", "FO", fill_fo, font_branca),
+                ("Folga Banco de Horas", "BH", fill_bh, font_branca),
+                ("Feriado Nacional", "", fill_feriado, None),
+                ("Fim de Semana", "", fill_fds, None)
+            ]
+            
+            for i, (texto, sigla, fill, font) in enumerate(legendas):
+                row_leg = start_leg + 1 + i
+                worksheet.row_dimensions[row_leg].height = 20
+                
+                # Nome da Legenda (Coluna A)
+                c_text = worksheet.cell(row=row_leg, column=1, value=texto)
+                c_text.alignment = Alignment(horizontal="right", vertical="center")
+                c_text.font = Font(italic=True, color="555555")
+                
+                # Caixinha Colorida (Coluna B)
+                c_box = worksheet.cell(row=row_leg, column=2, value=sigla)
+                c_box.fill = fill
+                c_box.border = thin_border
+                c_box.alignment = align_center
+                if font: c_box.font = font
         # ====================================================
 
         c_cal1, c_cal2 = st.columns([5, 1])
