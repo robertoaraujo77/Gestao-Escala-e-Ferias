@@ -47,18 +47,30 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# SISTEMA DE LOGIN (SEGURANÇA DA NUVEM)
+# SISTEMA DE LOGIN MULTI-PERFIL
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+    st.session_state.perfil = None
 
 if not st.session_state.logged_in:
     st.title("🔒 Acesso Restrito - TI Camarotti")
-    st.write("Por favor, insira a senha corporativa para gerenciar as escalas.")
+    st.write("Por favor, insira a senha para acessar o sistema.")
+    
+    # Busca as senhas no secrets. Se ainda usar o padrão antigo 'senha_acesso', usa ele como admin provisório.
+    senha_admin_correta = st.secrets.get("senha_admin", st.secrets.get("senha_acesso", "admin123"))
+    senha_leitura_correta = st.secrets.get("senha_leitura", "leitura123")
+    
     senha = st.text_input("Senha de Acesso", type="password")
+    
     if st.button("Entrar"):
-        if senha == st.secrets["senha_acesso"]: 
+        if senha == senha_admin_correta: 
             st.session_state.logged_in = True
+            st.session_state.perfil = "admin"
+            st.rerun()
+        elif senha == senha_leitura_correta:
+            st.session_state.logged_in = True
+            st.session_state.perfil = "leitura"
             st.rerun()
         else:
             st.error("Senha incorreta!")
@@ -91,32 +103,35 @@ def get_saldos(colab_id):
     bh_atual = bh_db + f_bh
     return dias_atual, bh_atual, dias_db, bh_db, f_efetivas, f_oficial, f_bh
 
-def obter_datas_ocupadas(colaborador_id):
-    cursor.execute("SELECT data_inicio, data_fim FROM lancamentos WHERE colaborador_id = %s AND tipo != 'Férias (Oficial)'", (colaborador_id,))
-    lancamentos = cursor.fetchall()
-    datas_ocupadas = set()
-    for d_ini_str, d_fim_str in lancamentos:
-        try:
-            d_ini = datetime.strptime(d_ini_str, "%d/%m/%Y")
-            d_fim = datetime.strptime(d_fim_str, "%d/%m/%Y")
-            atual = d_ini
-            while atual <= d_fim:
-                datas_ocupadas.add(atual.strftime("%d/%m/%Y"))
-                atual += timedelta(days=1)
-        except: pass
-    return datas_ocupadas
-
 # ==========================================
-# MENU DE NAVEGAÇÃO LATERAL
+# MENU DE NAVEGAÇÃO LATERAL (DINÂMICO)
 # ==========================================
 st.sidebar.title("📅 Gestão de Escala")
 st.sidebar.markdown("---")
-menu = st.sidebar.radio("Selecione o Módulo:", [
-    "📊 Dashboard Interativo", 
-    "👥 Gestão de Equipe", 
-    "✈️ Lançamentos",
-    "🌴 Gerir Feriados"
-])
+
+opcoes_menu = ["📊 Dashboard Interativo"]
+
+# Só adiciona os menus administrativos se o perfil for 'admin'
+if st.session_state.perfil == "admin":
+    opcoes_menu.extend([
+        "👥 Gestão de Equipe", 
+        "✈️ Lançamentos",
+        "🌴 Gerir Feriados"
+    ])
+
+menu = st.sidebar.radio("Selecione o Módulo:", opcoes_menu)
+
+st.sidebar.markdown("---")
+# Painel de Informação de Perfil e Logout
+if st.session_state.perfil == "admin":
+    st.sidebar.info("👤 Perfil: **Administrador**")
+else:
+    st.sidebar.success("👤 Perfil: **Somente Leitura**")
+
+if st.sidebar.button("Sair / Trocar Senha", use_container_width=True):
+    st.session_state.logged_in = False
+    st.session_state.perfil = None
+    st.rerun()
 
 # ==========================================
 # MÓDULO 1: DASHBOARD
@@ -125,50 +140,49 @@ if menu == "📊 Dashboard Interativo":
     st.header("Dashboard da Equipe")
     
     # ----------------------------------------------------
-    # SISTEMA DE ALERTA DP
+    # SISTEMA DE ALERTA DP (SÓ APARECE PARA ADMIN)
     # ----------------------------------------------------
-    cursor.execute("SELECT id, nome, venc_ferias FROM colaboradores WHERE ativo = 1")
-    alertas_aviso = []
-    alertas_vencidos = []
-    hoje_date = date.today()
-    
-    for colab_id, nome, venc_str in cursor.fetchall():
-        if venc_str:
-            try:
-                dt_limite = datetime.strptime(venc_str, "%d/%m/%Y").date()
-                dt_prazo_gestor = dt_limite - timedelta(days=45)
-                dif_dias = (dt_prazo_gestor - hoje_date).days
-                
-                cursor.execute("SELECT data_inicio FROM lancamentos WHERE colaborador_id=%s AND tipo LIKE 'Férias%%'", (colab_id,))
-                ja_resolveu = False
-                for (d_ini_str,) in cursor.fetchall():
-                    try:
-                        dt_ini_lancamento = datetime.strptime(d_ini_str, "%d/%m/%Y").date()
-                        if dt_ini_lancamento >= (dt_limite - timedelta(days=365)):
-                            ja_resolveu = True
-                            break
-                    except:
-                        pass
-                
-                if not ja_resolveu:
-                    if 0 <= dif_dias <= 45:
-                        alertas_aviso.append(f"⚠️ **{nome}**: Enviar pedido de férias ao DP até **{dt_prazo_gestor.strftime('%d/%m/%Y')}** (Prazo vence em {dif_dias} dias!)")
-                    elif dif_dias < 0:
-                        alertas_vencidos.append(f"🚨 **{nome}**: Prazo de envio ao DP **VENCIDO**! (Era até {dt_prazo_gestor.strftime('%d/%m/%Y')})")
-            except:
-                pass
-    
-    if alertas_vencidos or alertas_aviso:
-        with st.container():
-            for a in alertas_vencidos:
-                st.error(a)
-            for a in alertas_aviso:
-                st.warning(a)
-        st.markdown("<br>", unsafe_allow_html=True)
+    if st.session_state.perfil == "admin":
+        cursor.execute("SELECT id, nome, venc_ferias FROM colaboradores WHERE ativo = 1")
+        alertas_aviso = []
+        alertas_vencidos = []
+        hoje_date = date.today()
+        
+        for colab_id, nome, venc_str in cursor.fetchall():
+            if venc_str:
+                try:
+                    dt_limite = datetime.strptime(venc_str, "%d/%m/%Y").date()
+                    dt_prazo_gestor = dt_limite - timedelta(days=45)
+                    dif_dias = (dt_prazo_gestor - hoje_date).days
+                    
+                    cursor.execute("SELECT data_inicio FROM lancamentos WHERE colaborador_id=%s AND tipo LIKE 'Férias%%'", (colab_id,))
+                    ja_resolveu = False
+                    for (d_ini_str,) in cursor.fetchall():
+                        try:
+                            dt_ini_lancamento = datetime.strptime(d_ini_str, "%d/%m/%Y").date()
+                            if dt_ini_lancamento >= (dt_limite - timedelta(days=365)):
+                                ja_resolveu = True
+                                break
+                        except:
+                            pass
+                    
+                    if not ja_resolveu:
+                        if 0 <= dif_dias <= 45:
+                            alertas_aviso.append(f"⚠️ **{nome}**: Enviar pedido de férias ao DP até **{dt_prazo_gestor.strftime('%d/%m/%Y')}** (Prazo vence em {dif_dias} dias!)")
+                        elif dif_dias < 0:
+                            alertas_vencidos.append(f"🚨 **{nome}**: Prazo de envio ao DP **VENCIDO**! (Era até {dt_prazo_gestor.strftime('%d/%m/%Y')})")
+                except:
+                    pass
+        
+        if alertas_vencidos or alertas_aviso:
+            with st.container():
+                for a in alertas_vencidos:
+                    st.error(a)
+                for a in alertas_aviso:
+                    st.warning(a)
+            st.markdown("<br>", unsafe_allow_html=True)
+    # ----------------------------------------------------
 
-    # ----------------------------------------------------
-    # FILTROS PRINCIPAIS
-    # ----------------------------------------------------
     col1, col2 = st.columns([1, 3])
     ano_atual = datetime.now().year
     mes_atual = datetime.now().month
@@ -189,18 +203,12 @@ if menu == "📊 Dashboard Interativo":
     
     st.markdown("---")
     
-    # ----------------------------------------------------
-    # BUSCA DE DADOS E FERIADOS
-    # ----------------------------------------------------
     cursor.execute("SELECT c.nome, l.tipo, l.data_inicio, l.data_fim FROM lancamentos l JOIN colaboradores c ON l.colaborador_id = c.id WHERE c.ativo = 1 AND c.exibir_escala = 1")
     todos_lancamentos = cursor.fetchall()
     
     cursor.execute("SELECT data_feriado, descricao FROM feriados")
     feriados = {linha[0]: linha[1] for linha in cursor.fetchall()}
 
-    # ----------------------------------------------------
-    # RENDERIZAÇÃO DA VISÃO "RESUMO ANUAL"
-    # ----------------------------------------------------
     if mes_selecionado == "Resumo Anual":
         st.subheader(f"Resumo de Férias do Ano - {ano_selecionado}")
         dados_resumo = []
@@ -252,9 +260,6 @@ if menu == "📊 Dashboard Interativo":
         else:
             st.info("Nenhuma férias programada para este ano.")
 
-    # ----------------------------------------------------
-    # RENDERIZAÇÃO DA VISÃO "MENSAL" (Calendário ou Matriz)
-    # ----------------------------------------------------
     else:
         mes_num = meses.index(mes_selecionado)
         cal = calendar.monthcalendar(ano_selecionado, mes_num)
@@ -275,7 +280,6 @@ if menu == "📊 Dashboard Interativo":
         cursor.execute("SELECT nome FROM colaboradores WHERE ativo = 1 AND exibir_escala = 1 ORDER BY nome ASC")
         todos_colabs_export = [row[0] for row in cursor.fetchall()]
         
-        # --- GERADOR DO EXCEL DE DOWNLOAD (EM BACKGROUND) ---
         matriz_dados = []
         row_semana = {"Colaborador": "Dia da Semana ➔"}
         for dia in range(1, dias_no_mes + 1):
@@ -391,7 +395,6 @@ if menu == "📊 Dashboard Interativo":
                 c_box.alignment = align_center
                 if font: c_box.font = font
 
-        # --- SELETOR DE VISUALIZAÇÃO DA WEB E EXPORTAÇÃO ---
         c_view1, c_view2 = st.columns([3, 1])
         with c_view1:
             visao_web = st.radio("Formato de Exibição Web:", ["📊 Matriz de Escala (Heatmap)", "🗓️ Calendário Clássico"], horizontal=True)
